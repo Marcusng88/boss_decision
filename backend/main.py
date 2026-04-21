@@ -61,13 +61,6 @@ class SimulatorRequest(BaseModel):
     business_context: Optional[dict[str, Any]] = None
 
 
-class EmployeeResponse(BaseModel):
-    """Response model for employee endpoint."""
-    employee: dict
-    hr_records: list[dict]
-    sales_records: list[dict]
-
-
 def _ensure_simulator_import_path() -> None:
     simulator_root = Path(__file__).resolve().parent / "simulator_agent_umh26"
     simulator_root_str = str(simulator_root)
@@ -98,23 +91,6 @@ def _ndjson_line(payload: dict[str, Any]) -> str:
     return json.dumps(payload, default=str) + "\n"
 
 
-def _extract_token_text(raw_content: Any) -> str:
-    if isinstance(raw_content, str):
-        return raw_content
-
-    if isinstance(raw_content, list):
-        parts: list[str] = []
-        for item in raw_content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                if isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-        return "".join(parts)
-
-    return ""
-
-
 def _safe_json_payload(data: Any) -> Any:
     try:
         json.dumps(data, default=str)
@@ -143,7 +119,7 @@ async def health_check():
     try:
         # Test database connection
         supabase = db.client
-        response = supabase.table('department').select('count').execute()
+        supabase.table('department').select('count').execute()
         
         return {
             "status": "healthy",
@@ -251,7 +227,7 @@ async def stream_simulator(request: SimulatorRequest):
             yield _ndjson_line({"type": "status", "message": "Simulator stream started."})
             async for part in simulator_agent.astream(
                 initial_state,
-                stream_mode=["updates", "messages", "values"],
+                stream_mode=["updates", "values", "custom"],
                 version="v2",
             ):
                 part_type = part.get("type")
@@ -266,26 +242,20 @@ async def stream_simulator(request: SimulatorRequest):
                                 "updates": _safe_json_payload(updates),
                             }
                         )
-                elif part_type == "messages":
-                    data = part.get("data")
-                    if isinstance(data, (tuple, list)) and data:
-                        message_chunk = data[0]
-                        metadata = data[1] if len(data) > 1 and isinstance(data[1], dict) else {}
-                        raw_content = getattr(message_chunk, "content", "")
-                        token = _extract_token_text(raw_content)
-                        if token:
-                            yield _ndjson_line(
-                                {
-                                    "type": "token",
-                                    "text": token,
-                                    "node": metadata.get("langgraph_node"),
-                                    "meta": _safe_json_payload(metadata),
-                                }
-                            )
                 elif part_type == "values":
                     values = part.get("data")
                     if isinstance(values, dict):
                         latest_values = values
+                elif part_type == "custom":
+                    custom_data = part.get("data")
+                    if isinstance(custom_data, dict):
+                        yield _ndjson_line(
+                            {
+                                "type": "custom",
+                                "event": custom_data.get("event"),
+                                "data": _safe_json_payload(custom_data),
+                            }
+                        )
 
             if latest_values is not None:
                 yield _ndjson_line(

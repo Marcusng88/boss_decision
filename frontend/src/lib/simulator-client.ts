@@ -6,13 +6,12 @@ export interface SimulatorRequest {
 }
 
 export interface SimulatorStreamEvent {
-  type: "status" | "update" | "token" | "final" | "error" | "done";
+  type: "status" | "update" | "custom" | "final" | "error" | "done";
   message?: string;
   nodes?: string[];
   updates?: Record<string, unknown>;
-  text?: string;
-  node?: string;
-  meta?: Record<string, unknown>;
+  event?: string;
+  data?: Record<string, unknown>;
   response?: unknown;
   state?: Record<string, unknown>;
   error?: string;
