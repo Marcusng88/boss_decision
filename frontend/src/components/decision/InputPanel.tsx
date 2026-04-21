@@ -1,7 +1,7 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Sparkles, Loader2 } from "lucide-react";
+import { Sparkles, Loader2, Wand2 } from "lucide-react";
 
 interface InputPanelProps {
   onAnalyze: (query: string) => void;
@@ -23,57 +23,53 @@ export const InputPanel = ({ onAnalyze, isAnalyzing }: InputPanelProps) => {
   };
 
   return (
-    <aside className="bg-card rounded-2xl shadow-card border border-border p-6 h-fit lg:sticky lg:top-6">
-      <div className="flex items-center gap-2 mb-1">
-        <div className="w-8 h-8 rounded-lg bg-gradient-primary flex items-center justify-center shadow-glow">
+    <aside className="h-fit rounded-[1.6rem] border border-border bg-card/80 p-6 shadow-card lg:sticky lg:top-24">
+      <div className="mb-1 flex items-center gap-2">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-primary shadow-glow">
           <Sparkles className="w-4 h-4 text-primary-foreground" />
         </div>
-        <h2 className="text-lg font-semibold text-foreground">Ask the Engine</h2>
+        <h2 className="text-3xl leading-none text-foreground">Ask the Engine</h2>
       </div>
-      <p className="text-sm text-muted-foreground mb-4">
-        Pose a strategic decision. Watch the agents reason.
+      <p className="mb-4 text-sm text-muted-foreground">
+        Pose a strategic decision and watch each specialist layer form a recommendation.
       </p>
 
-      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-        Decision query
-      </label>
+      <label className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Decision query</label>
       <Textarea
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="e.g. Should we fire employee #1023?"
-        className="mt-2 min-h-[120px] resize-none text-base bg-background border-border focus-visible:ring-primary"
+        className="mt-2 min-h-[130px] resize-none rounded-xl border-border bg-background/80 text-base leading-relaxed focus-visible:ring-primary"
         disabled={isAnalyzing}
       />
 
       <Button
         onClick={handleSubmit}
         disabled={isAnalyzing || !query.trim()}
-        className="w-full mt-4 h-11 bg-gradient-primary text-primary-foreground font-semibold shadow-elevated hover:shadow-glow transition-smooth border-0"
+        className="mt-4 h-11 w-full border-0 bg-gradient-primary font-semibold text-primary-foreground shadow-elevated transition-smooth hover:shadow-glow"
       >
         {isAnalyzing ? (
           <>
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            Analyzing…
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Analyzing...
           </>
         ) : (
           <>
-            <Sparkles className="w-4 h-4 mr-2" />
+            <Wand2 className="mr-2 h-4 w-4" />
             Analyze Decision
           </>
         )}
       </Button>
 
-      <div className="mt-6 pt-6 border-t border-border">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">
-          Try a sample
-        </p>
+      <div className="mt-6 border-t border-border pt-6">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Try a sample</p>
         <div className="flex flex-col gap-2">
           {SAMPLE_QUERIES.map((s) => (
             <button
               key={s}
               onClick={() => !isAnalyzing && setQuery(s)}
               disabled={isAnalyzing}
-              className="text-left text-sm px-3 py-2 rounded-lg bg-secondary hover:bg-accent hover:text-accent-foreground transition-smooth text-secondary-foreground disabled:opacity-50"
+              className="rounded-lg border border-border bg-secondary/85 px-3 py-2 text-left text-sm text-secondary-foreground transition-smooth hover:border-accent/30 hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
             >
               {s}
             </button>

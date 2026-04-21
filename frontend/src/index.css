@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,53 +10,53 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 210 40% 98%;
-    --foreground: 222 47% 11%;
+    --background: 38 56% 96%;
+    --foreground: 204 32% 16%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 204 32% 16%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover-foreground: 204 32% 16%;
 
-    --primary: 217 91% 55%;
+    --primary: 18 88% 51%;
     --primary-foreground: 0 0% 100%;
-    --primary-glow: 217 91% 70%;
+    --primary-glow: 20 95% 67%;
 
-    --secondary: 214 32% 94%;
-    --secondary-foreground: 222 47% 11%;
+    --secondary: 35 45% 92%;
+    --secondary-foreground: 204 32% 16%;
 
-    --muted: 214 32% 95%;
-    --muted-foreground: 215 16% 47%;
+    --muted: 42 37% 93%;
+    --muted-foreground: 203 14% 38%;
 
-    --accent: 199 89% 48%;
+    --accent: 171 66% 36%;
     --accent-foreground: 0 0% 100%;
 
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
-    --success: 142 71% 45%;
+    --success: 148 62% 34%;
     --success-foreground: 0 0% 100%;
 
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
+    --warning: 38 86% 44%;
+    --warning-foreground: 46 70% 98%;
 
-    --conservative: 199 89% 48%;
-    --aggressive: 14 91% 55%;
+    --conservative: 171 66% 36%;
+    --aggressive: 10 78% 52%;
 
-    --border: 214 32% 88%;
-    --input: 214 32% 91%;
-    --ring: 217 91% 55%;
+    --border: 36 31% 82%;
+    --input: 35 40% 88%;
+    --ring: 18 88% 51%;
 
-    --radius: 0.875rem;
+    --radius: 1rem;
 
-    --gradient-primary: linear-gradient(135deg, hsl(217 91% 55%), hsl(199 89% 48%));
-    --gradient-decision: linear-gradient(135deg, hsl(217 91% 55%) 0%, hsl(217 91% 45%) 100%);
-    --gradient-subtle: linear-gradient(180deg, hsl(210 40% 98%) 0%, hsl(214 32% 95%) 100%);
+    --gradient-primary: linear-gradient(140deg, hsl(18 88% 51%), hsl(10 78% 52%));
+    --gradient-decision: linear-gradient(145deg, hsl(204 32% 16%) 0%, hsl(198 30% 21%) 100%);
+    --gradient-subtle: radial-gradient(circle at 8% 4%, hsl(40 92% 90%) 0%, transparent 42%), radial-gradient(circle at 88% 12%, hsl(171 40% 88%) 0%, transparent 36%), linear-gradient(180deg, hsl(38 56% 96%) 0%, hsl(35 45% 92%) 100%);
 
-    --shadow-card: 0 1px 3px 0 hsl(217 30% 20% / 0.06), 0 1px 2px -1px hsl(217 30% 20% / 0.04);
-    --shadow-elevated: 0 10px 25px -8px hsl(217 91% 55% / 0.18), 0 4px 10px -4px hsl(217 91% 55% / 0.1);
-    --shadow-glow: 0 0 40px hsl(217 91% 70% / 0.35);
+    --shadow-card: 0 1px 1px hsl(205 20% 20% / 0.05), 0 10px 24px -16px hsl(203 28% 24% / 0.22);
+    --shadow-elevated: 0 20px 40px -24px hsl(15 70% 40% / 0.34), 0 8px 24px -12px hsl(203 28% 24% / 0.25);
+    --shadow-glow: 0 0 40px hsl(20 95% 67% / 0.38);
 
     --transition-smooth: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 
@@ -121,5 +123,27 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground;
+    font-family: "Manrope", "Segoe UI", sans-serif;
+    min-height: 100vh;
+    background-image: var(--gradient-subtle);
+    background-attachment: fixed;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: "Cormorant Garamond", Georgia, serif;
+    letter-spacing: 0.01em;
+  }
+
+  code,
+  pre {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.22);
+    color: hsl(var(--foreground));
   }
 }

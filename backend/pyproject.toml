@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "chromadb",
+    "deepagents>=0.5.3",
     "fastapi",
     "httpx",
     "langchain",
@@ -17,5 +18,6 @@ dependencies = [
     "pydantic-settings",
     "python-dotenv",
     "supabase",
+    "tavily-python>=0.7.23",
     "uvicorn[standard]",
 ]
