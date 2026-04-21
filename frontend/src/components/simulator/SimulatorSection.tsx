@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  Bot,
+  BrainCircuit,
   ChevronRight,
+  Crown,
+  Flame,
+  GitBranch,
   Eye,
   EyeOff,
   Gauge,
+  ListTree,
   Loader2,
   Orbit,
+  Radar,
   Rocket,
-  ShieldAlert,
-  Sparkles,
-  TrendingUp,
+  ScanSearch,
+  Timer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -76,7 +80,8 @@ function normalizePersona(data: unknown): PersonaCard | null {
     : [];
   const rationale = typeof raw.rationale === "string" ? raw.rationale : "";
   const kpi_deltas = raw.kpi_deltas && typeof raw.kpi_deltas === "object" ? (raw.kpi_deltas as Record<string, number>) : {};
-  const isFallback = risks.some((risk) => risk.toLowerCase().includes("fallback"));
+  const rationaleFallback = rationale.toLowerCase().includes("fallback");
+  const isFallback = risks.some((risk) => risk.toLowerCase().includes("fallback")) || rationaleFallback;
 
   return {
     persona_id,
@@ -103,10 +108,17 @@ function titleizePersonaId(personaId: string): string {
 }
 
 function statusTone(status: PersonaState): string {
-  if (status === "done") return "bg-success/15 text-success border-success/30";
-  if (status === "fallback") return "bg-warning/15 text-warning border-warning/30";
-  if (status === "running") return "bg-primary/15 text-primary border-primary/30";
-  return "bg-muted text-muted-foreground border-border";
+  if (status === "done") return "bg-success/15 text-foreground border-success/35";
+  if (status === "fallback") return "bg-warning/15 text-foreground border-warning/35";
+  if (status === "running") return "bg-primary/15 text-foreground border-primary/35";
+  return "bg-muted/80 text-foreground border-border";
+}
+
+function statusAccent(status: PersonaState): string {
+  if (status === "done") return "from-emerald-500/30 to-emerald-500/5";
+  if (status === "fallback") return "from-amber-500/30 to-amber-500/5";
+  if (status === "running") return "from-cyan-500/30 to-cyan-500/5";
+  return "from-zinc-500/25 to-zinc-500/5";
 }
 
 function flowTone(state: StepState): string {
@@ -115,9 +127,20 @@ function flowTone(state: StepState): string {
   return "border-border bg-background/70 text-muted-foreground";
 }
 
+function nodePillTone(state: StepState): string {
+  if (state === "done") return "bg-success/15 text-foreground border-success/35";
+  if (state === "active") return "bg-primary/15 text-foreground border-primary/35 animate-pulse";
+  return "bg-muted text-muted-foreground border-border";
+}
+
 function findLikelyPersonaFromToken(text: string, personaIds: string[]): string | null {
   const lower = text.toLowerCase();
-  const match = personaIds.find((id) => lower.includes(id.toLowerCase().replace(/_/g, " ")));
+  const match = personaIds.find((id) => {
+    const normalizedId = id.toLowerCase();
+    const idAsSpace = normalizedId.replace(/[_-]/g, " ");
+    const idAsDash = normalizedId.replace(/[_ ]/g, "-");
+    return lower.includes(normalizedId) || lower.includes(idAsSpace) || lower.includes(idAsDash);
+  });
   return match ?? null;
 }
 
@@ -132,7 +155,6 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
   const [topRisks, setTopRisks] = useState<string[]>([]);
   const [topOpportunities, setTopOpportunities] = useState<string[]>([]);
   const [kpiDeltas, setKpiDeltas] = useState<Record<string, number>>({});
-  const [liveFeed, setLiveFeed] = useState<string[]>([]);
   const [eventLog, setEventLog] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -165,6 +187,16 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
     return Math.round(avg * 100);
   }, [personas]);
 
+  const swarmCounts = useMemo(() => {
+    const counts = { queued: 0, running: 0, done: 0, fallback: 0 };
+    Object.values(personas).forEach((persona) => {
+      counts[persona.status] += 1;
+    });
+    return counts;
+  }, [personas]);
+
+  const activeNode = useMemo(() => FLOW.find((step) => flowState[step.id] === "active") ?? null, [flowState]);
+
   const applyNodeUpdate = (node: string) => {
     if (!FLOW_NODE_SET.has(node as FlowNode)) return;
     const flowNode = node as FlowNode;
@@ -182,11 +214,28 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
     setEventLog((prev) => [...prev, entry].slice(-80));
   };
 
-  const appendFeed = (line: string) => {
-    setLiveFeed((prev) => [...prev, line].slice(-70));
+  const ensurePersonaExists = (personaId: string) => {
+    setPersonas((prev) => {
+      if (prev[personaId]) return prev;
+      return {
+        ...prev,
+        [personaId]: {
+          persona_id: personaId,
+          confidence: 0,
+          risks: [],
+          opportunities: [],
+          rationale: "Subagent actively reasoning over scenario details.",
+          kpi_deltas: {},
+          status: "queued",
+          stream: [],
+        },
+      };
+    });
+    setPersonaOrder((prev) => (prev.includes(personaId) ? prev : [...prev, personaId]));
   };
 
   const markPersonaRunning = (personaId: string) => {
+    ensurePersonaExists(personaId);
     setPersonas((prev) => {
       const item = prev[personaId];
       if (!item) return prev;
@@ -202,6 +251,7 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
   };
 
   const appendPersonaStream = (personaId: string, line: string) => {
+    ensurePersonaExists(personaId);
     setPersonas((prev) => {
       const item = prev[personaId];
       if (!item) return prev;
@@ -209,7 +259,7 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
         ...prev,
         [personaId]: {
           ...item,
-          stream: [...item.stream, line].slice(-8),
+          stream: [...item.stream, line].slice(-240),
         },
       };
     });
@@ -218,20 +268,22 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
   const handleEvent = (event: SimulatorStreamEvent) => {
     if (event.type === "status" && event.message) {
       appendEventLog(event.message);
-      appendFeed(`System: ${event.message}`);
       return;
     }
 
     if (event.type === "token" && event.text) {
-      const tokenText = clipText(event.text, 200);
+      const tokenText = event.text;
+      const tokenPreview = clipText(tokenText, 200);
       const nodeName = typeof event.node === "string" && event.node ? event.node : "model_stream";
-      appendFeed(`${nodeName}: ${tokenText}`);
+      appendEventLog(`${nodeName}: ${tokenPreview}`);
 
       const personaIds = personaOrder.length > 0 ? personaOrder : Object.keys(personas);
       const personaFromToken = findLikelyPersonaFromToken(tokenText, personaIds);
+      const personaFromMeta = event.meta && typeof event.meta.persona_id === "string" ? event.meta.persona_id : null;
+      const personaFromNode = findLikelyPersonaFromToken(nodeName, personaIds);
       const runningPersona = personaIds.find((id) => personas[id]?.status === "running");
       const queuedPersona = personaIds.find((id) => personas[id]?.status === "queued");
-      const targetPersona = personaFromToken ?? runningPersona ?? queuedPersona ?? null;
+      const targetPersona = personaFromMeta ?? personaFromToken ?? personaFromNode ?? runningPersona ?? queuedPersona ?? null;
 
       if (targetPersona) {
         markPersonaRunning(targetPersona);
@@ -278,7 +330,7 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
               return next;
             });
             setSelectedPersona((current) => current ?? personaIds[0]);
-            appendFeed(`Orchestrator: Spawned ${personaIds.length} subagents.`);
+            appendEventLog(`Orchestrator: Spawned ${personaIds.length} subagents.`);
           }
         }
 
@@ -288,12 +340,13 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
             if (!evt || typeof evt !== "object") return;
             const row = evt as Record<string, unknown>;
             const personaId = typeof row.persona_id === "string" ? row.persona_id : null;
-            const text = typeof row.text === "string" ? clipText(row.text, 180) : "";
+            const text = typeof row.text === "string" ? row.text : "";
+            const preview = clipText(text, 180);
             const nodeName = typeof row.node === "string" && row.node ? row.node : "subagent";
             if (!personaId || !text) return;
             markPersonaRunning(personaId);
             appendPersonaStream(personaId, text);
-            appendFeed(`${titleizePersonaId(personaId)} · ${nodeName}: ${text}`);
+            appendEventLog(`${titleizePersonaId(personaId)} · ${nodeName}: ${preview}`);
           });
         }
 
@@ -319,7 +372,7 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
             parsed.forEach((persona) => {
               const personaName = titleizePersonaId(persona.persona_id);
               const statusWord = persona.status === "fallback" ? "fallback" : "completed";
-              appendFeed(`${personaName}: ${statusWord} analysis.`);
+              appendEventLog(`${personaName}: ${statusWord} analysis.`);
             });
           }
         }
@@ -363,7 +416,7 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
         });
       }
 
-      appendFeed("System: Recommendation package finalized.");
+      appendEventLog("System: Recommendation package finalized.");
 
       try {
         localStorage.setItem(
@@ -383,7 +436,7 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
 
     if (event.type === "error") {
       setError(event.error ?? "Unknown simulator error.");
-      appendFeed(`System error: ${event.error ?? "Unknown simulator error."}`);
+      appendEventLog(`System error: ${event.error ?? "Unknown simulator error."}`);
     }
   };
 
@@ -399,7 +452,6 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
     setTopRisks([]);
     setTopOpportunities([]);
     setKpiDeltas({});
-    setLiveFeed([]);
     setEventLog([]);
     setError(null);
     const started = Date.now();
@@ -439,97 +491,101 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
     .map((id) => personas[id])
     .filter((item): item is PersonaCard => Boolean(item));
 
+  const selectedPersonaTranscript = selectedPersonaCard
+    ? selectedPersonaCard.stream.join("")
+    : "";
+
   return (
-    <section className="overflow-hidden rounded-[2rem] border border-border bg-card/85 shadow-elevated">
-      <div className="relative border-b border-border px-6 py-6 md:px-10 bg-[radial-gradient(circle_at_8%_0%,rgba(233,119,46,0.32),transparent_48%),radial-gradient(circle_at_84%_10%,rgba(22,154,142,0.28),transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(252,246,238,0.98))]">
-        <div className="absolute inset-0 opacity-10 [background-image:linear-gradient(to_right,rgba(28,28,28,0.2)_1px,transparent_1px),linear-gradient(to_bottom,rgba(28,28,28,0.2)_1px,transparent_1px)] [background-size:34px_34px]" />
-        <div className="relative grid gap-4 xl:grid-cols-[1.1fr_0.9fr] xl:items-end">
+    <section className="relative w-full overflow-hidden bg-background text-foreground">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_5%,hsl(var(--primary)/0.16),transparent_34%),radial-gradient(circle_at_90%_8%,hsl(var(--warning)/0.14),transparent_34%),radial-gradient(circle_at_50%_75%,hsl(var(--accent)/0.15),transparent_38%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-20 [background-image:linear-gradient(to_right,hsl(var(--foreground)/0.1)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--foreground)/0.1)_1px,transparent_1px)] [background-size:42px_42px]" />
+      <div className="relative border-b border-border/80 px-6 py-6 md:px-8">
+        <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr] xl:items-end">
           <div>
-            <p className="text-[0.65rem] uppercase tracking-[0.32em] text-primary">Mission Control</p>
-            <h2 className="mt-2 text-4xl leading-none text-foreground md:text-5xl">Simulation Command Deck</h2>
-            <p className="mt-3 max-w-2xl text-sm text-muted-foreground">
-              Live orchestration of deep-agent subagents, timeline progression, and recommendation synthesis.
+            <p className="text-[0.62rem] uppercase tracking-[0.35em] text-primary">Strategic War Room</p>
+            <h2 className="mt-2 text-4xl leading-[0.95] md:text-5xl" style={{ fontFamily: '"Baskerville Old Face", "Times New Roman", serif' }}>
+              Swarm Simulation Reactor
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+              Realtime node-level execution, deep-agent swarm streams, and final recommendation synthesis.
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-border bg-background/75 p-3">
-              <p className="text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">Runtime</p>
-              <p className="mt-1 flex items-center gap-2 text-sm font-semibold text-foreground">
-                <Orbit className="h-4 w-4 text-primary" />
-                {isRunning ? "Live" : "Standby"}
+            <div className="rounded-xl border border-border bg-card/80 p-3 shadow-card">
+              <p className="text-[0.62rem] uppercase tracking-[0.2em] text-muted-foreground">Runtime</p>
+              <p className="mt-1 inline-flex items-center gap-2 text-sm font-semibold">
+                <Orbit className={`h-4 w-4 ${isRunning ? "text-primary animate-spin" : "text-muted-foreground"}`} />
+                {isRunning ? "Hot" : "Idle"}
               </p>
             </div>
-            <div className="rounded-xl border border-border bg-background/75 p-3">
-              <p className="text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">Elapsed</p>
-              <p className="mt-1 text-sm font-semibold text-foreground">{elapsedSeconds.toFixed(1)}s</p>
+            <div className="rounded-xl border border-border bg-card/80 p-3 shadow-card">
+              <p className="text-[0.62rem] uppercase tracking-[0.2em] text-muted-foreground">Elapsed</p>
+              <p className="mt-1 inline-flex items-center gap-2 text-sm font-semibold">
+                <Timer className="h-4 w-4 text-warning" />
+                {elapsedSeconds.toFixed(1)}s
+              </p>
             </div>
-            <div className="rounded-xl border border-border bg-background/75 p-3">
-              <p className="text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">Swarm Confidence</p>
-              <p className="mt-1 text-sm font-semibold text-foreground">{swarmConfidence}%</p>
+            <div className="rounded-xl border border-border bg-card/80 p-3 shadow-card">
+              <p className="text-[0.62rem] uppercase tracking-[0.2em] text-muted-foreground">Confidence</p>
+              <p className="mt-1 inline-flex items-center gap-2 text-sm font-semibold">
+                <Crown className="h-4 w-4 text-success" />
+                {swarmConfidence}%
+              </p>
             </div>
           </div>
         </div>
+        <div className="mt-5 flex flex-col gap-3 lg:flex-row">
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="h-12 border-border bg-card/80 text-foreground placeholder:text-muted-foreground focus-visible:ring-primary"
+            placeholder="Enter a business simulation question"
+            style={{ fontFamily: '"IBM Plex Mono", monospace' }}
+          />
+          <Button
+            onClick={runSimulation}
+            disabled={isRunning}
+            className="h-12 min-w-52 border border-primary/30 bg-primary px-5 font-semibold text-primary-foreground hover:bg-primary/90"
+            style={{ fontFamily: '"IBM Plex Mono", monospace' }}
+          >
+            {isRunning ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Running Swarm
+              </>
+            ) : (
+              <>
+                <Rocket className="mr-2 h-4 w-4" />
+                Launch Swarm
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
-      <div className="grid gap-6 p-6 md:p-10 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="space-y-5">
-          <div className="rounded-2xl border border-border bg-background/80 p-4">
-            <label className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Scenario Prompt</label>
-            <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="h-12 border-border bg-card text-foreground placeholder:text-muted-foreground focus-visible:ring-primary"
-                placeholder="Enter a business simulation question"
-                style={{ fontFamily: '"IBM Plex Mono", monospace' }}
-              />
-              <Button
-                onClick={runSimulation}
-                disabled={isRunning}
-                className="h-12 min-w-44 border border-primary/30 bg-primary px-5 font-semibold text-primary-foreground hover:bg-primary/90"
-                style={{ fontFamily: '"IBM Plex Mono", monospace' }}
-              >
-                {isRunning ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Running
-                  </>
-                ) : (
-                  <>
-                    <Rocket className="mr-2 h-4 w-4" />
-                    Launch Simulation
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-border bg-background/80 p-4">
+      <div className="relative grid gap-5 px-6 py-6 md:px-8 md:py-7 xl:grid-cols-12">
+        <aside className="space-y-5 xl:col-span-3">
+          <div className="rounded-2xl border border-border bg-card/75 p-4 shadow-card">
             <div className="mb-3 flex items-center justify-between">
-              <p className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
+              <p className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
                 <Activity className="h-4 w-4 text-primary" />
-                Process Rail
+                Mission Timeline
               </p>
-              <Badge variant="secondary" className="bg-card text-foreground">
-                {progressValue}% complete
-              </Badge>
+              <Badge className="border border-border bg-secondary text-secondary-foreground">{progressValue}%</Badge>
             </div>
             <Progress value={progressValue} className="h-2 bg-muted" />
             <div className="mt-4 space-y-2">
               {FLOW.map((step, idx) => {
-                const state = flowState[step.id];
+                const stepStatus = flowState[step.id];
                 return (
-                  <div key={step.id} className={`rounded-xl border p-3 transition-all ${flowTone(state)}`}>
-                    <div className="flex items-start justify-between gap-4">
+                  <div key={step.id} className={`rounded-xl border p-3 ${flowTone(stepStatus)}`}>
+                    <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-sm font-semibold">
-                          {idx + 1}. {step.label}
-                        </p>
-                        <p className="mt-1 text-xs leading-relaxed opacity-85">{step.narrative}</p>
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Phase {idx + 1}</p>
+                        <p className="text-sm font-semibold">{step.label}</p>
+                        <p className="mt-1 text-xs leading-relaxed opacity-80">{step.narrative}</p>
                       </div>
-                      <Badge className={state === "done" ? "bg-success/20 text-success" : state === "active" ? "bg-primary/20 text-primary animate-pulse-glow" : "bg-muted text-muted-foreground"}>
-                        {state}
-                      </Badge>
+                      <Badge className={`border ${nodePillTone(stepStatus)}`}>{stepStatus}</Badge>
                     </div>
                   </div>
                 );
@@ -537,35 +593,28 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-border bg-background/80 p-4">
-            <p className="mb-3 flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
-              <Sparkles className="h-4 w-4 text-primary" />
-              Live Agent Comms
-            </p>
-            <div className="max-h-56 space-y-2 overflow-auto">
-              {liveFeed.length === 0 && <p className="text-sm text-muted-foreground">Waiting for stream events...</p>}
-              {liveFeed.map((line, index) => (
-                <div key={`${line}-${index}`} className="rounded-md border border-border bg-card/75 px-3 py-2 text-xs text-foreground" style={{ fontFamily: '"IBM Plex Mono", monospace' }}>
-                  {line}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        </aside>
 
-        <div className="space-y-5">
-          <div className="rounded-2xl border border-border bg-background/80 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
-                <Bot className="h-4 w-4 text-primary" />
-                Subagent Swarm Board
+        <main className="space-y-5 xl:col-span-5">
+          <div className="rounded-2xl border border-border bg-card/75 p-4 shadow-card">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <p className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
+                <Radar className="h-4 w-4 text-primary" />
+                Swarm Stage
               </p>
-              <Badge variant="secondary" className="bg-card text-foreground">
-                {orderedPersonas.length} active
-              </Badge>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <Badge className="border border-border bg-secondary text-secondary-foreground">Queued {swarmCounts.queued}</Badge>
+                <Badge className="border border-primary/40 bg-primary/10 text-foreground">Running {swarmCounts.running}</Badge>
+                <Badge className="border border-success/40 bg-success/10 text-foreground">Done {swarmCounts.done}</Badge>
+                <Badge className="border border-warning/40 bg-warning/10 text-foreground">Fallback {swarmCounts.fallback}</Badge>
+              </div>
             </div>
-            <div className="grid max-h-72 gap-2 overflow-auto sm:grid-cols-2">
-              {orderedPersonas.length === 0 && <p className="text-sm text-muted-foreground">No personas spawned yet.</p>}
+            <div className="grid max-h-[31rem] gap-3 overflow-auto sm:grid-cols-2">
+              {orderedPersonas.length === 0 && (
+                <div className="rounded-xl border border-border bg-card/75 p-4 text-sm text-muted-foreground">
+                  No subagents spawned yet.
+                </div>
+              )}
               {orderedPersonas.map((persona) => {
                 const selected = selectedPersona === persona.persona_id;
                 const lastStream = persona.stream[persona.stream.length - 1];
@@ -574,128 +623,80 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
                     key={persona.persona_id}
                     type="button"
                     onClick={() => setSelectedPersona(persona.persona_id)}
-                    className={`rounded-xl border p-3 text-left transition-all ${
-                      selected ? "border-primary bg-primary/10 shadow-card" : "border-border bg-card/75 hover:bg-card"
+                    className={`relative overflow-hidden rounded-xl border text-left transition ${
+                      selected
+                        ? "border-primary/70 bg-card shadow-[0_0_0_1px_hsl(var(--primary)/0.3),0_18px_34px_-24px_hsl(var(--primary)/0.65)]"
+                        : "border-border bg-card/80 hover:border-primary/50 hover:bg-card"
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold text-foreground">{titleizePersonaId(persona.persona_id)}</p>
-                        <p className="text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground">{persona.persona_id}</p>
+                    <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${statusAccent(persona.status)} opacity-90`} />
+                    <div className="relative p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">{titleizePersonaId(persona.persona_id)}</p>
+                          <p className="text-[0.62rem] uppercase tracking-[0.16em] text-muted-foreground">{persona.persona_id}</p>
+                        </div>
+                        <Badge className={statusTone(persona.status)}>{persona.status}</Badge>
                       </div>
-                      <Badge className={statusTone(persona.status)}>{persona.status}</Badge>
+                      <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Confidence</span>
+                        <span>{Math.round(persona.confidence * 100)}%</span>
+                      </div>
+                      <div className="mt-1 h-1.5 rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary"
+                          style={{ width: `${Math.max(6, Math.min(100, Math.round(persona.confidence * 100)))}%` }}
+                        />
+                      </div>
+                      <p
+                        className="mt-3 rounded-md border border-border/70 bg-background/70 px-2 py-2 text-xs leading-relaxed text-foreground"
+                        style={{ fontFamily: '"IBM Plex Mono", monospace' }}
+                      >
+                        {lastStream ? clipText(lastStream, 140) : "Awaiting live stream..."}
+                      </p>
                     </div>
-                    <p className="mt-2 text-xs text-muted-foreground">Confidence {Math.round(persona.confidence * 100)}%</p>
-                    <p className="mt-2 text-xs leading-relaxed text-foreground">
-                      {lastStream ? clipText(lastStream, 110) : "Awaiting subagent stream..."}
-                    </p>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <div className="rounded-2xl border border-border bg-background/80 p-4">
-            <p className="mb-3 text-xs uppercase tracking-[0.22em] text-muted-foreground">Subagent Inspector</p>
-            {!selectedPersonaCard && <p className="text-sm text-muted-foreground">Select a persona card to inspect detailed reasoning.</p>}
-            {selectedPersonaCard && (
-              <div className="space-y-4 text-sm">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-base font-semibold text-foreground">{titleizePersonaId(selectedPersonaCard.persona_id)}</p>
-                    <p className="text-xs text-muted-foreground">{selectedPersonaCard.persona_id}</p>
-                  </div>
-                  <Badge className={statusTone(selectedPersonaCard.status)}>{selectedPersonaCard.status}</Badge>
-                </div>
-
-                <div className="rounded-xl border border-border bg-card/70 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Rationale</p>
-                  <p className="mt-2 text-sm leading-relaxed text-foreground">
-                    {selectedPersonaCard.rationale || "No rationale available yet."}
-                  </p>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-xl border border-border bg-card/70 p-3">
-                    <p className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                      <ShieldAlert className="h-3.5 w-3.5 text-warning" />
-                      Risks
+          <div className="rounded-2xl border border-border bg-card/75 p-4 shadow-card">
+            <p className="mb-3 inline-flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
+              <Gauge className="h-4 w-4 text-success" />
+              Decision Reactor
+            </p>
+            <div className="rounded-xl border border-border bg-background/70 p-4 text-sm leading-relaxed text-foreground">
+              {recommendation || "Aggregator is still composing the final recommendation..."}
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-border bg-background/70 p-3">
+                <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Top Risks</p>
+                <div className="mt-2 space-y-1">
+                  {(topRisks.length > 0 ? topRisks.slice(0, 3) : ["No dominant downside signal yet."]).map((risk, index) => (
+                    <p key={`${risk}-${index}`} className="text-xs text-foreground">
+                      {risk}
                     </p>
-                    <div className="space-y-1">
-                      {(selectedPersonaCard.risks.length > 0 ? selectedPersonaCard.risks : ["No risk signals yet."]).map((risk, index) => (
-                        <p key={`${risk}-${index}`} className="text-xs text-foreground">
-                          {risk}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-border bg-card/70 p-3">
-                    <p className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                      <TrendingUp className="h-3.5 w-3.5 text-success" />
-                      Opportunities
-                    </p>
-                    <div className="space-y-1">
-                      {(selectedPersonaCard.opportunities.length > 0 ? selectedPersonaCard.opportunities : ["No upside signals yet."]).map((item, index) => (
-                        <p key={`${item}-${index}`} className="text-xs text-foreground">
-                          {item}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-border bg-card/70 p-3">
-                  <p className="mb-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">Subagent Stream Snippets</p>
-                  <div className="space-y-1">
-                    {(selectedPersonaCard.stream.length > 0 ? selectedPersonaCard.stream : ["No stream snippets captured yet."]).map((line, index) => (
-                      <p key={`${line}-${index}`} className="text-xs text-foreground" style={{ fontFamily: '"IBM Plex Mono", monospace' }}>
-                        {line}
-                      </p>
-                    ))}
-                  </div>
+                  ))}
                 </div>
               </div>
-            )}
-          </div>
-
-          <div className="rounded-2xl border border-border bg-background/80 p-4">
-            <p className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
-              <Gauge className="h-4 w-4 text-primary" />
-              Outcome Composer
-            </p>
-            <p className="rounded-xl border border-border bg-card/70 p-3 text-sm leading-relaxed text-foreground">
-              {recommendation || "Recommendation is still synthesizing..."}
-            </p>
-            {(topRisks.length > 0 || topOpportunities.length > 0) && (
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-xl border border-border bg-card/70 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Top Risks</p>
-                  <div className="mt-2 space-y-1">
-                    {topRisks.slice(0, 3).map((risk, index) => (
-                      <p key={`${risk}-${index}`} className="text-xs text-foreground">
-                        {risk}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-border bg-card/70 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Top Opportunities</p>
-                  <div className="mt-2 space-y-1">
-                    {topOpportunities.slice(0, 3).map((item, index) => (
-                      <p key={`${item}-${index}`} className="text-xs text-foreground">
-                        {item}
-                      </p>
-                    ))}
-                  </div>
+              <div className="rounded-xl border border-border bg-background/70 p-3">
+                <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Top Opportunities</p>
+                <div className="mt-2 space-y-1">
+                  {(topOpportunities.length > 0 ? topOpportunities.slice(0, 3) : ["No dominant upside signal yet."]).map((item, index) => (
+                    <p key={`${item}-${index}`} className="text-xs text-foreground">
+                      {item}
+                    </p>
+                  ))}
                 </div>
               </div>
-            )}
+            </div>
             {Object.keys(kpiDeltas).length > 0 && (
-              <div className="mt-3 rounded-xl border border-border bg-card/70 p-3">
+              <div className="mt-3 rounded-xl border border-border bg-background/70 p-3">
                 <p className="mb-2 text-xs uppercase tracking-[0.14em] text-muted-foreground">KPI Deltas</p>
                 <div className="space-y-1">
                   {Object.entries(kpiDeltas)
-                    .slice(0, 5)
+                    .slice(0, 6)
                     .map(([metric, value]) => (
                       <p key={metric} className="flex items-center justify-between text-xs text-foreground">
                         <span>{metric}</span>
@@ -709,16 +710,52 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
               </div>
             )}
           </div>
+        </main>
 
-          {error && <div className="rounded-xl border border-red-500/30 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+        <aside className="space-y-5 xl:col-span-4">
+          <div className="rounded-2xl border border-border bg-card/75 p-4 shadow-card">
+            <p className="mb-3 inline-flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
+              <BrainCircuit className="h-4 w-4 text-primary" />
+              Subagent Transcript
+            </p>
+            {!selectedPersonaCard && <p className="text-sm text-muted-foreground">Select a subagent card to inspect its live stream.</p>}
+            {selectedPersonaCard && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-base font-semibold text-foreground">{titleizePersonaId(selectedPersonaCard.persona_id)}</p>
+                    <p className="text-xs text-muted-foreground">{selectedPersonaCard.persona_id}</p>
+                  </div>
+                  <Badge className={statusTone(selectedPersonaCard.status)}>{selectedPersonaCard.status}</Badge>
+                </div>
+                <div className="rounded-xl border border-border bg-background/80 p-3">
+                  <p className="mb-2 inline-flex items-center gap-1 text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                    <Flame className="h-3.5 w-3.5 text-primary" />
+                    Realtime Markdown
+                  </p>
+                  <article
+                    className="max-h-[24rem] overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-foreground"
+                    style={{ fontFamily: '"IBM Plex Mono", monospace' }}
+                  >
+                    {selectedPersonaTranscript || "Waiting for first token..."}
+                  </article>
+                </div>
+              </div>
+            )}
+          </div>
 
-          <div className="rounded-2xl border border-border bg-background/80 p-4">
+          {error && <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
+
+          <div className="rounded-2xl border border-border bg-card/75 p-4 shadow-card">
             <button
               type="button"
               onClick={() => setShowTechTrace((prev) => !prev)}
               className="flex w-full items-center justify-between text-left"
             >
-              <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Technical Trace</p>
+              <p className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
+                <ListTree className="h-4 w-4 text-primary" />
+                Trace Console
+              </p>
               <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                 {showTechTrace ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 {showTechTrace ? "Hide" : "Show"}
@@ -726,18 +763,37 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
               </span>
             </button>
             {showTechTrace && (
-              <div className="mt-3 max-h-36 space-y-1 overflow-auto">
+              <div className="mt-3 max-h-44 space-y-1 overflow-auto">
                 {eventLog.length === 0 && <p className="text-xs text-muted-foreground">No node events captured yet.</p>}
                 {eventLog.map((entry, index) => (
-                  <p key={`${entry}-${index}`} className="rounded border border-border bg-card/70 px-2 py-1 text-xs text-foreground" style={{ fontFamily: '"IBM Plex Mono", monospace' }}>
+                  <p
+                    key={`${entry}-${index}`}
+                    className="rounded border border-border bg-background/75 px-2 py-1 text-xs text-foreground"
+                    style={{ fontFamily: '"IBM Plex Mono", monospace' }}
+                  >
                     {entry}
                   </p>
                 ))}
               </div>
             )}
           </div>
-        </div>
+
+          <div className="rounded-2xl border border-border bg-card/75 p-4 shadow-card">
+            <p className="mb-2 inline-flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
+              <ScanSearch className="h-4 w-4 text-primary" />
+              Current Focus
+            </p>
+            <p className="text-sm text-foreground">
+              {activeNode ? `${activeNode.label}: ${activeNode.narrative}` : "Awaiting first execution node."}
+            </p>
+            <p className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
+              <GitBranch className="h-3.5 w-3.5" />
+              Branch stress tests activate after impact rollup.
+            </p>
+          </div>
+        </aside>
       </div>
     </section>
   );
 }
+
