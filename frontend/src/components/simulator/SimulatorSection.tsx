@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BrainCircuit,
@@ -17,6 +17,8 @@ import {
   ScanSearch,
   Timer,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -160,12 +162,22 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const [showTechTrace, setShowTechTrace] = useState(false);
+  const streamBufferRef = useRef<Record<string, string>>({});
+  const flushTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isRunning) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 200);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [isRunning]);
+
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+      }
+    };
+  }, []);
 
   const elapsedSeconds = useMemo(() => {
     if (!startedAt) return 0;
@@ -252,16 +264,53 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
 
   const appendPersonaStream = (personaId: string, line: string) => {
     ensurePersonaExists(personaId);
+    streamBufferRef.current[personaId] = `${streamBufferRef.current[personaId] ?? ""}${line}`;
+    if (flushTimerRef.current !== null) return;
+    flushTimerRef.current = window.setTimeout(() => {
+      const updates = streamBufferRef.current;
+      streamBufferRef.current = {};
+      flushTimerRef.current = null;
+      const personaIds = Object.keys(updates);
+      if (personaIds.length === 0) return;
+      setPersonas((prev) => {
+        const next = { ...prev };
+        personaIds.forEach((id) => {
+          const item = next[id];
+          if (!item) return;
+          const text = updates[id];
+          if (!text) return;
+          next[id] = {
+            ...item,
+            stream: [...item.stream, text].slice(-240),
+          };
+        });
+        return next;
+      });
+    }, 80);
+  };
+
+  const flushPersonaStreamBuffer = () => {
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    const updates = streamBufferRef.current;
+    streamBufferRef.current = {};
+    const personaIds = Object.keys(updates);
+    if (personaIds.length === 0) return;
     setPersonas((prev) => {
-      const item = prev[personaId];
-      if (!item) return prev;
-      return {
-        ...prev,
-        [personaId]: {
+      const next = { ...prev };
+      personaIds.forEach((id) => {
+        const item = next[id];
+        if (!item) return;
+        const text = updates[id];
+        if (!text) return;
+        next[id] = {
           ...item,
-          stream: [...item.stream, line].slice(-240),
-        },
-      };
+          stream: [...item.stream, text].slice(-240),
+        };
+      });
+      return next;
     });
   };
 
@@ -273,9 +322,11 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
 
     if (event.type === "token" && event.text) {
       const tokenText = event.text;
-      const tokenPreview = clipText(tokenText, 200);
       const nodeName = typeof event.node === "string" && event.node ? event.node : "model_stream";
-      appendEventLog(`${nodeName}: ${tokenPreview}`);
+      if (showTechTrace) {
+        const tokenPreview = clipText(tokenText, 200);
+        appendEventLog(`${nodeName}: ${tokenPreview}`);
+      }
 
       const personaIds = personaOrder.length > 0 ? personaOrder : Object.keys(personas);
       const personaFromToken = findLikelyPersonaFromToken(tokenText, personaIds);
@@ -391,6 +442,7 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
     }
 
     if (event.type === "final") {
+      flushPersonaStreamBuffer();
       const payload = (event.response ?? event.state ?? null) as Record<string, unknown> | null;
       const response = (payload?.response ?? payload) as Record<string, unknown> | undefined;
       if (typeof response?.recommendation === "string") setRecommendation(response.recommendation);
@@ -435,6 +487,7 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
     }
 
     if (event.type === "error") {
+      flushPersonaStreamBuffer();
       setError(event.error ?? "Unknown simulator error.");
       appendEventLog(`System error: ${event.error ?? "Unknown simulator error."}`);
     }
@@ -454,6 +507,11 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
     setKpiDeltas({});
     setEventLog([]);
     setError(null);
+    streamBufferRef.current = {};
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
     const started = Date.now();
     setStartedAt(started);
     setNow(started);
@@ -733,11 +791,16 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
                     <Flame className="h-3.5 w-3.5 text-primary" />
                     Realtime Markdown
                   </p>
-                  <article
-                    className="max-h-[24rem] overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-foreground"
-                    style={{ fontFamily: '"IBM Plex Mono", monospace' }}
-                  >
-                    {selectedPersonaTranscript || "Waiting for first token..."}
+                  <article className="max-h-[24rem] overflow-auto text-sm leading-relaxed text-foreground">
+                    {selectedPersonaTranscript ? (
+                      <div className="space-y-3 break-words [&_a]:text-primary [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:whitespace-pre-wrap [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/40 [&_pre]:p-2">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {selectedPersonaTranscript}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground">Waiting for first token...</p>
+                    )}
                   </article>
                 </div>
               </div>
@@ -796,4 +859,8 @@ export function SimulatorSection({ initialQuery }: SimulatorSectionProps) {
     </section>
   );
 }
+
+
+
+
 
