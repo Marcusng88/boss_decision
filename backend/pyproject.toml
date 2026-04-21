@@ -1,0 +1,21 @@
+[project]
+name = "boss-decision-backend"
+version = "0.1.0"
+description = "Backend API for the AI Boss Decision Engine"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chromadb",
+    "fastapi",
+    "httpx",
+    "langchain",
+    "langchain-community",
+    "langchain-openai",
+    "openai",
+    "psycopg2-binary",
+    "pydantic",
+    "pydantic-settings",
+    "python-dotenv",
+    "supabase",
+    "uvicorn[standard]",
+]
