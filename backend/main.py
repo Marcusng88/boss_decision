@@ -77,7 +77,7 @@ def _ensure_simulator_import_path() -> None:
 
 def _get_simulator_agent():
     _ensure_simulator_import_path()
-    from src.agent import agent as simulator_agent
+    from simulator_agent_umh26.src import agent as simulator_agent
 
     return simulator_agent
 
