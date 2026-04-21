@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, Clock3, Orbit } from "lucide-react";
+import { ArrowUpRight, Clock3, Orbit, Spline } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 
@@ -54,13 +54,22 @@ export function SimulationLauncherCard({ query }: SimulationLauncherCardProps) {
             Run realtime simulation in a dedicated workspace with streaming updates.
           </p>
         </div>
-        <Button asChild className="h-11 border border-primary/30 bg-primary px-5 text-primary-foreground hover:bg-primary/90">
-          <Link to={launchHref} target="_blank" rel="noreferrer">
-            <Orbit className="mr-2 h-4 w-4" />
-            Open Simulation Tab
-            <ArrowUpRight className="ml-2 h-4 w-4" />
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild className="h-11 border border-primary/30 bg-primary px-5 text-primary-foreground hover:bg-primary/90">
+            <Link to={launchHref} target="_blank" rel="noreferrer">
+              <Orbit className="mr-2 h-4 w-4" />
+              Open Classic Simulation
+              <ArrowUpRight className="ml-2 h-4 w-4" />
+            </Link>
+          </Button>
+          <Button asChild variant="outline" className="h-11 border border-border bg-card px-5 text-foreground hover:bg-card/80">
+            <Link to="/simulation-deep" target="_blank" rel="noreferrer">
+              <Spline className="mr-2 h-4 w-4" />
+              Open Deep 2D Arena
+              <ArrowUpRight className="ml-2 h-4 w-4" />
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <div className="mt-5 rounded-xl border border-border bg-background/70 p-4">
