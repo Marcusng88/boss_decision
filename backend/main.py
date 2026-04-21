@@ -89,6 +89,7 @@ def _build_simulator_initial_state(request: SimulatorRequest) -> dict[str, Any]:
         "documents": request.documents or [],
         "business_context": request.business_context or {},
         "persona_results": [],
+        "persona_stream_events": [],
         "scenario_branches": [],
     }
 
@@ -112,6 +113,14 @@ def _extract_token_text(raw_content: Any) -> str:
         return "".join(parts)
 
     return ""
+
+
+def _safe_json_payload(data: Any) -> Any:
+    try:
+        json.dumps(data, default=str)
+        return data
+    except Exception:
+        return str(data)
 
 
 # ============================================
@@ -250,15 +259,29 @@ async def stream_simulator(request: SimulatorRequest):
                     updates = part.get("data", {})
                     nodes = list(updates.keys()) if isinstance(updates, dict) else []
                     if nodes:
-                        yield _ndjson_line({"type": "update", "nodes": nodes})
+                        yield _ndjson_line(
+                            {
+                                "type": "update",
+                                "nodes": nodes,
+                                "updates": _safe_json_payload(updates),
+                            }
+                        )
                 elif part_type == "messages":
                     data = part.get("data")
                     if isinstance(data, (tuple, list)) and data:
                         message_chunk = data[0]
+                        metadata = data[1] if len(data) > 1 and isinstance(data[1], dict) else {}
                         raw_content = getattr(message_chunk, "content", "")
                         token = _extract_token_text(raw_content)
                         if token:
-                            yield _ndjson_line({"type": "token", "text": token})
+                            yield _ndjson_line(
+                                {
+                                    "type": "token",
+                                    "text": token,
+                                    "node": metadata.get("langgraph_node"),
+                                    "meta": _safe_json_payload(metadata),
+                                }
+                            )
                 elif part_type == "values":
                     values = part.get("data")
                     if isinstance(values, dict):

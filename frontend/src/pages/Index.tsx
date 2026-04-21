@@ -5,7 +5,7 @@ import { DataRetrieved } from "@/components/decision/DataRetrieved";
 import { AgentInsights } from "@/components/decision/AgentInsights";
 import { SubagentViews } from "@/components/decision/SubagentViews";
 import { FinalDecision } from "@/components/decision/FinalDecision";
-import { SimulatorSection } from "@/components/simulator/SimulatorSection";
+import { SimulationLauncherCard } from "@/components/simulator/SimulationLauncherCard";
 import { analyze, AnalysisResult } from "@/lib/decision-engine";
 
 type Stage = "idle" | "data" | "agents" | "subagents" | "decision";
@@ -138,7 +138,9 @@ const Index = () => {
           </div>
         </div>
 
-        <SimulatorSection />
+        <div className="mt-12">
+          <SimulationLauncherCard query={activeQuery} />
+        </div>
       </main>
     </div>
   );

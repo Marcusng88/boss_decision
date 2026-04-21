@@ -9,7 +9,10 @@ export interface SimulatorStreamEvent {
   type: "status" | "update" | "token" | "final" | "error" | "done";
   message?: string;
   nodes?: string[];
+  updates?: Record<string, unknown>;
   text?: string;
+  node?: string;
+  meta?: Record<string, unknown>;
   response?: unknown;
   state?: Record<string, unknown>;
   error?: string;
