@@ -1,0 +1,29 @@
+# Core API Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.0
+python-dotenv==1.0.1
+
+# Database
+supabase==2.9.0
+psycopg2-binary==2.9.9
+
+# LangChain & AI
+langchain==0.3.7
+langchain-community==0.3.5
+langchain-openai==0.2.5
+openai==1.54.0
+
+# Vector Stores (optional, choose one or both)
+chromadb==0.5.20
+# faiss-cpu==1.9.0  # Uncomment if using FAISS
+
+# OCR & Document Processing (for Kai Haung)
+# pypdf==5.1.0
+# pdf2image==1.17.0
+# pytesseract==0.3.13
+# Pillow==11.0.0
+
+# Utilities
+httpx==0.27.2
+pydantic-settings==2.6.0
