@@ -26,6 +26,7 @@ def world_event(state: DeepSimulationState) -> dict[str, Any]:
             "scores": state.agent_scores,
             "positions": state.agent_positions,
             "agents": [agent.model_dump() for agent in state.agents],
+            "personas": [persona.model_dump() for persona in state.personas],
             "timeline": [item.model_dump(mode="json") for item in state.timeline],
             "map": state.map.model_dump(),
         },

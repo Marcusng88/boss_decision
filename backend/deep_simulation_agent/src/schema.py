@@ -109,6 +109,16 @@ class ObserverSummary(BaseModel):
     markdown: str
 
 
+class PersonaObservationReport(BaseModel):
+    persona_id: str
+    name: str
+    role: str
+    objective: str
+    stance: str
+    evidence: list[str] = Field(default_factory=list)
+    suggested_next_action: str = ""
+
+
 class DeepSimulationState(BaseModel):
     query: str
     scenario_id: str
@@ -134,4 +144,5 @@ class DeepSimulationFinalResponse(BaseModel):
     recommendation: str
     confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     periodic_summaries: list[ObserverSummary] = Field(default_factory=list)
+    persona_observations: list[PersonaObservationReport] = Field(default_factory=list)
     html_slides: str = ""
