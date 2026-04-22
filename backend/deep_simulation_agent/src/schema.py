@@ -73,11 +73,53 @@ class AgentObservation(BaseModel):
 class ActionIntent(BaseModel):
     persona_id: str
     tick: int
-    action_type: Literal["move", "price_adjust", "spend_shift", "campaign", "procurement", "wait"] = "wait"
+    action_type: Literal[
+        "move",
+        "talk",
+        "propose",
+        "support",
+        "oppose",
+        "price_adjust",
+        "spend_shift",
+        "campaign",
+        "procurement",
+        "wait",
+    ] = "wait"
     args: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     rationale_md: str = ""
     requested_via_tool: bool = False
+    requested_tool: str = ""
+
+
+GamePhase = Literal["setup", "world", "observe", "action", "resolution", "scoring", "summary", "complete"]
+ActionStatus = Literal["pending", "resolved", "rejected"]
+
+
+class ActionRecord(BaseModel):
+    tick: int
+    phase: GamePhase = "action"
+    persona_id: str
+    persona_name: str = ""
+    action_type: str
+    status: ActionStatus = "pending"
+    summary: str = ""
+    target_zone_id: Optional[str] = None
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    args: dict[str, Any] = Field(default_factory=dict)
+    rationale_md: str = ""
+    outcome: str = ""
+    requested_via_tool: bool = False
+    requested_tool: str = ""
+
+
+class ActiveEventCard(BaseModel):
+    id: str
+    title: str
+    summary: str = ""
+    effects: dict[str, float] = Field(default_factory=dict)
+    counter_actions: list[str] = Field(default_factory=list)
+    matched_actions: list[str] = Field(default_factory=list)
 
 
 class TimelineEvent(BaseModel):
@@ -102,6 +144,38 @@ class TickEvent(BaseModel):
     ]
     source: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocialLink(BaseModel):
+    source_persona_id: str
+    target_persona_id: str
+    trust: float = Field(default=0.0, ge=-1.0, le=1.0)
+    talk_count: int = Field(default=0, ge=0)
+    support_count: int = Field(default=0, ge=0)
+    oppose_count: int = Field(default=0, ge=0)
+    last_interaction: str = "none"
+    updated_tick: int = Field(default=0, ge=0)
+
+
+class PersonaScoreBreakdown(BaseModel):
+    persona_id: str
+    persona_name: str = ""
+    base_points: float = 0.0
+    movement_points: float = 0.0
+    intent_quality_points: float = 0.0
+    kpi_contribution_points: float = 0.0
+    crisis_response_points: float = 0.0
+    timing_points: float = 0.0
+    resource_efficiency_points: float = 0.0
+    social_influence_points: float = 0.0
+    total_delta: float = 0.0
+    total_score: float = 0.0
+
+
+class TickScoreBreakdown(BaseModel):
+    tick: int = Field(ge=0)
+    kpi_shift: float = 0.0
+    personas: list[PersonaScoreBreakdown] = Field(default_factory=list)
 
 
 class ObserverSummary(BaseModel):
@@ -132,6 +206,13 @@ class DeepSimulationState(BaseModel):
     global_kpis: KPIState
     agent_scores: dict[str, float] = Field(default_factory=dict)
     agent_positions: dict[str, int] = Field(default_factory=dict)
+    current_phase: GamePhase = "setup"
+    pending_actions: list[ActionRecord] = Field(default_factory=list)
+    resolved_actions: list[ActionRecord] = Field(default_factory=list)
+    active_event: Optional[ActiveEventCard] = None
+    social_links: list[SocialLink] = Field(default_factory=list)
+    latest_score_breakdown: Optional[TickScoreBreakdown] = None
+    score_breakdown_history: list[TickScoreBreakdown] = Field(default_factory=list)
     timeline: list[TimelineEvent] = Field(default_factory=list)
     tick_events: list[TickEvent] = Field(default_factory=list)
     observer_summaries: list[ObserverSummary] = Field(default_factory=list)

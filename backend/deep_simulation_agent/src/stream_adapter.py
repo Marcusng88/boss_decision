@@ -22,9 +22,20 @@ def world_event(state: DeepSimulationState) -> dict[str, Any]:
         "state": {
             "tick": state.tick,
             "max_ticks": state.max_ticks,
+            "phase": state.current_phase,
             "kpi": state.global_kpis.model_dump(),
             "scores": state.agent_scores,
             "positions": state.agent_positions,
+            "pending_actions": [item.model_dump(mode="json") for item in state.pending_actions],
+            "resolved_actions": [item.model_dump(mode="json") for item in state.resolved_actions],
+            "active_event": state.active_event.model_dump(mode="json") if state.active_event is not None else None,
+            "social_links": [item.model_dump(mode="json") for item in state.social_links],
+            "latest_score_breakdown": (
+                state.latest_score_breakdown.model_dump(mode="json")
+                if state.latest_score_breakdown is not None
+                else None
+            ),
+            "score_breakdown_history": [item.model_dump(mode="json") for item in state.score_breakdown_history[-40:]],
             "agents": [agent.model_dump() for agent in state.agents],
             "personas": [persona.model_dump() for persona in state.personas],
             "timeline": [item.model_dump(mode="json") for item in state.timeline],

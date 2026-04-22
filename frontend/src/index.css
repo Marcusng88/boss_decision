@@ -149,6 +149,89 @@ All colors MUST be HSL.
 }
 
 @layer utilities {
+  @keyframes sim-think {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-2px);
+    }
+  }
+
+  @keyframes sim-act {
+    0%,
+    100% {
+      transform: translateY(0) scale(1);
+      filter: saturate(1);
+    }
+    50% {
+      transform: translateY(-1px) scale(1.04);
+      filter: saturate(1.15);
+    }
+  }
+
+  @keyframes board-shake {
+    0% {
+      transform: translate(0, 0);
+    }
+    20% {
+      transform: translate(-1.5px, 0.8px);
+    }
+    40% {
+      transform: translate(1.6px, -1px);
+    }
+    60% {
+      transform: translate(-1.1px, -0.8px);
+    }
+    80% {
+      transform: translate(1.1px, 0.7px);
+    }
+    100% {
+      transform: translate(0, 0);
+    }
+  }
+
+  @keyframes board-edge-flow {
+    from {
+      stroke-dashoffset: 0;
+    }
+    to {
+      stroke-dashoffset: -9;
+    }
+  }
+
+  @keyframes tile-ping {
+    0% {
+      transform: translate(-50%, -50%) scale(0.55);
+      opacity: 0.92;
+    }
+    100% {
+      transform: translate(-50%, -50%) scale(1.2);
+      opacity: 0;
+    }
+  }
+
+  .board-token-thinking {
+    animation: sim-think 1.2s ease-in-out infinite;
+  }
+
+  .board-token-acting {
+    animation: sim-act 0.7s ease-in-out infinite;
+  }
+
+  .board-shake {
+    animation: board-shake 0.32s ease-in-out;
+  }
+
+  .board-edge-flow {
+    animation: board-edge-flow 1.6s linear infinite;
+  }
+
+  .tile-ping {
+    animation: tile-ping 0.9s ease-out forwards;
+  }
+
   .sim-scroll {
     scrollbar-width: thin;
     scrollbar-color: hsl(var(--border)) hsl(var(--background));

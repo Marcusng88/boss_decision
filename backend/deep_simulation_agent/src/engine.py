@@ -15,16 +15,21 @@ from .orchestrator import DeepOrchestrator
 from .rules import apply_intents_to_kpis
 from .rules import resolve_conflicts
 from .rules import validate_intent
+from .schema import ActionRecord
 from .schema import ActionIntent
+from .schema import ActiveEventCard
 from .schema import AgentObservation
 from .schema import AgentSnapshot
 from .schema import DeepSimulationRequest
 from .schema import DeepSimulationState
+from .schema import GamePhase
 from .schema import KPIState
+from .schema import SocialLink
 from .schema import TickEvent
 from .schema import TimelineEvent
 from .schema import WorldMap
 from .schema import WorldZone
+from .scoring import score_tick
 from .stream_adapter import agent_chunk_event
 from .stream_adapter import progress_event
 from .stream_adapter import tick_event_to_stream
@@ -156,6 +161,18 @@ class DeepSimulationEngine:
             )
             scores[persona.id] = 0.0
             positions[persona.id] = 0
+        social_links: list[SocialLink] = []
+        persona_ids = [persona.id for persona in self.orchestrator.personas]
+        for source_id in persona_ids:
+            for target_id in persona_ids:
+                if source_id == target_id:
+                    continue
+                social_links.append(
+                    SocialLink(
+                        source_persona_id=source_id,
+                        target_persona_id=target_id,
+                    )
+                )
         return DeepSimulationState(
             query=self.request.query,
             scenario_id=self.request.scenario_id,
@@ -169,6 +186,13 @@ class DeepSimulationEngine:
             global_kpis=KPIState(),
             agent_scores=scores,
             agent_positions=positions,
+            current_phase="setup",
+            pending_actions=[],
+            resolved_actions=[],
+            active_event=None,
+            social_links=social_links,
+            latest_score_breakdown=None,
+            score_breakdown_history=[],
             timeline=[],
             tick_events=[],
             observer_summaries=[],
@@ -195,6 +219,104 @@ class DeepSimulationEngine:
         self.state.tick_events = self.state.tick_events[-400:]
         return event
 
+    def _set_phase(self, phase: GamePhase) -> None:
+        self.state.current_phase = phase
+
+    def _zone_id_for_persona(self, persona_id: str) -> str | None:
+        zones = self.state.map.zones
+        if not zones:
+            return None
+        idx = self.state.agent_positions.get(persona_id, 0) % len(zones)
+        return zones[idx].id
+
+    def _persona_name(self, persona_id: str) -> str:
+        agent = self._agent_by_id(persona_id)
+        return agent.name if agent is not None else persona_id
+
+    def _social_link(self, source_id: str, target_id: str) -> SocialLink | None:
+        return next(
+            (
+                item
+                for item in self.state.social_links
+                if item.source_persona_id == source_id and item.target_persona_id == target_id
+            ),
+            None,
+        )
+
+    def _update_social_link(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        tick: int,
+        interaction: str,
+        trust_delta: float,
+        talk_delta: int = 0,
+        support_delta: int = 0,
+        oppose_delta: int = 0,
+    ) -> None:
+        if source_id == target_id:
+            return
+        link = self._social_link(source_id, target_id)
+        if link is None:
+            return
+        link.trust = round(_clamp(link.trust + trust_delta, -1.0, 1.0), 3)
+        link.talk_count = max(0, link.talk_count + talk_delta)
+        link.support_count = max(0, link.support_count + support_delta)
+        link.oppose_count = max(0, link.oppose_count + oppose_delta)
+        link.last_interaction = interaction
+        link.updated_tick = tick
+
+    def _social_context_for(self, persona_id: str) -> list[dict[str, Any]]:
+        related = [item for item in self.state.social_links if item.source_persona_id == persona_id]
+        related.sort(key=lambda row: abs(row.trust), reverse=True)
+        return [
+            {
+                "target_persona_id": item.target_persona_id,
+                "trust": item.trust,
+                "talk_count": item.talk_count,
+                "support_count": item.support_count,
+                "oppose_count": item.oppose_count,
+                "last_interaction": item.last_interaction,
+                "updated_tick": item.updated_tick,
+            }
+            for item in related[:8]
+        ]
+
+    def _action_record_from_intent(
+        self,
+        intent: ActionIntent,
+        *,
+        status: str,
+        phase: GamePhase,
+        outcome: str = "",
+    ) -> ActionRecord:
+        args = dict(intent.args)
+        zone_id = str(args.get("zone_id")).strip() if isinstance(args.get("zone_id"), str) else self._zone_id_for_persona(intent.persona_id)
+        summary = str(
+            args.get("summary")
+            or args.get("message")
+            or args.get("reason")
+            or args.get("strategy_type")
+            or intent.action_type.replace("_", " ")
+        )
+        return ActionRecord(
+            tick=intent.tick,
+            phase=phase,
+            persona_id=intent.persona_id,
+            persona_name=self._persona_name(intent.persona_id),
+            action_type=intent.action_type,
+            status=status,
+            summary=summary,
+            target_zone_id=zone_id,
+            confidence=intent.confidence,
+            args=args,
+            rationale_md=intent.rationale_md,
+            outcome=outcome,
+            requested_via_tool=intent.requested_via_tool,
+            requested_tool=intent.requested_tool,
+        )
+
     def _observation_for(self, persona_id: str, tick: int) -> AgentObservation:
         agent = self._agent_by_id(persona_id)
         return AgentObservation(
@@ -206,12 +328,24 @@ class DeepSimulationEngine:
                 "global_kpis": self.state.global_kpis.model_dump(),
                 "recent_timeline": [item.model_dump(mode="json") for item in self.state.timeline[:6]],
                 "map_zones": [zone.model_dump() for zone in self.state.map.zones],
+                "social_context": self._social_context_for(persona_id),
             },
             goals=["simulate 1 day and update strategic posture"],
             constraints={
                 "tick_equals_days": 1,
                 "max_ticks": self.state.max_ticks,
-                "allowed_actions": ["move", "price_adjust", "spend_shift", "campaign", "procurement", "wait"],
+                "allowed_actions": [
+                    "move",
+                    "talk",
+                    "propose",
+                    "support",
+                    "oppose",
+                    "price_adjust",
+                    "spend_shift",
+                    "campaign",
+                    "procurement",
+                    "wait",
+                ],
             },
         )
 
@@ -363,7 +497,7 @@ class DeepSimulationEngine:
             message=f"Crisis card: {title} (mitigation {round(mitigation_ratio * 100)}%).",
             source="engine:crisis",
         )
-        return {
+        crisis = {
             "id": card_id,
             "title": title,
             "effects": {
@@ -375,6 +509,15 @@ class DeepSimulationEngine:
             "counter_actions": counter_actions,
             "matched_actions": [intent.action_type for intent in matched],
         }
+        self.state.active_event = ActiveEventCard(
+            id=card_id,
+            title=title,
+            summary=f"Market shock in play. Mitigation {round(mitigation_ratio * 100)}%.",
+            effects=crisis["effects"],
+            counter_actions=counter_actions,
+            matched_actions=crisis["matched_actions"],
+        )
+        return crisis
 
     def _award_points(
         self,
@@ -386,39 +529,127 @@ class DeepSimulationEngine:
         crisis: dict[str, Any] | None,
     ) -> None:
         rules = self._game_rules()
-        intent_by_persona = {intent.persona_id: intent for intent in resolved}
-        kpi_shift = (
-            (self.state.global_kpis.revenue - kpi_before.revenue)
-            + (self.state.global_kpis.margin - kpi_before.margin)
-            + (self.state.global_kpis.sentiment - kpi_before.sentiment)
-            - (self.state.global_kpis.churn_risk - kpi_before.churn_risk)
+        persona_names = {agent.id: agent.name for agent in self.state.agents}
+        next_scores, breakdown = score_tick(
+            tick=tick,
+            max_ticks=self.state.max_ticks,
+            active_ids=active_ids,
+            persona_names=persona_names,
+            current_scores=self.state.agent_scores,
+            rules=rules,
+            rolls=rolls,
+            resolved=resolved,
+            kpi_before=kpi_before,
+            kpi_after=self.state.global_kpis,
+            crisis=crisis,
+            social_links=self.state.social_links,
         )
-        for persona_id in active_ids:
-            total = self.state.agent_scores.get(persona_id, 0.0)
-            total += rules["daily_base_points"]
-            total += rules["move_points_per_step"] * float(rolls.get(persona_id, 0))
-            intent = intent_by_persona.get(persona_id)
-            if intent is not None:
-                total += rules["intent_points_multiplier"] * max(0.1, float(intent.confidence))
-            if crisis and intent is not None:
-                matched = crisis.get("matched_actions")
-                if isinstance(matched, list) and intent.action_type in matched:
-                    total += 0.7
-            total += rules["kpi_points_multiplier"] * (kpi_shift / max(1, len(active_ids)))
-            self.state.agent_scores[persona_id] = round(max(0.0, total), 2)
+        self.state.agent_scores = next_scores
+        self.state.latest_score_breakdown = breakdown
+        self.state.score_breakdown_history.append(breakdown)
+        self.state.score_breakdown_history = self.state.score_breakdown_history[-240:]
         self._record_tick_event(
             tick=tick,
             event_type="kpi_delta",
             source="engine:scoring",
-            payload={"scores": self.state.agent_scores},
+            payload={
+                "scores": self.state.agent_scores,
+                "score_breakdown": breakdown.model_dump(mode="json"),
+            },
         )
 
-    def _apply_resolved_intents(self, tick: int, intents: list[ActionIntent]) -> list[dict[str, Any]]:
+    def _apply_resolved_intents(self, tick: int, intents: list[ActionIntent]) -> tuple[list[ActionIntent], list[dict[str, Any]]]:
         accepted: list[ActionIntent] = []
         rejections: list[dict[str, Any]] = []
+        zone_ids = {zone.id for zone in self.state.map.zones}
+        zone_index_by_id = {zone.id: idx for idx, zone in enumerate(self.state.map.zones)}
+        persona_ids = {persona.id for persona in self.state.personas}
         for intent in intents:
             valid, reason = validate_intent(intent, self.state.global_kpis)
+            if valid and intent.action_type == "move":
+                zone_id = str(intent.args.get("zone_id", "")).strip()
+                if zone_id and zone_ids and zone_id not in zone_ids:
+                    valid = False
+                    reason = f"move rejected: unknown zone_id `{zone_id}`."
+            if valid and intent.action_type == "talk":
+                target_id = str(intent.args.get("target_persona_id", "")).strip()
+                if target_id and target_id not in persona_ids:
+                    valid = False
+                    reason = f"talk rejected: unknown target_persona_id `{target_id}`."
+            if valid and intent.action_type in {"support", "oppose"}:
+                target_id = str(intent.args.get("target_persona_id", "")).strip()
+                if target_id and target_id not in persona_ids:
+                    valid = False
+                    reason = f"{intent.action_type} rejected: unknown target_persona_id `{target_id}`."
             if valid:
+                if intent.action_type == "move":
+                    zone_id = str(intent.args.get("zone_id", "")).strip()
+                    idx = zone_index_by_id.get(zone_id)
+                    if idx is not None:
+                        self.state.agent_positions[intent.persona_id] = idx
+                        target = self.state.map.zones[idx]
+                        agent = self._agent_by_id(intent.persona_id)
+                        if agent is not None:
+                            agent.x = target.x
+                            agent.y = target.y
+                if intent.action_type == "talk":
+                    target_id = str(intent.args.get("target_persona_id", "")).strip()
+                    if target_id:
+                        boost = 0.16 * max(0.1, float(intent.confidence))
+                        self._update_social_link(
+                            source_id=intent.persona_id,
+                            target_id=target_id,
+                            tick=tick,
+                            interaction="talk",
+                            trust_delta=boost,
+                            talk_delta=1,
+                        )
+                        self._update_social_link(
+                            source_id=target_id,
+                            target_id=intent.persona_id,
+                            tick=tick,
+                            interaction="talk",
+                            trust_delta=boost * 0.55,
+                            talk_delta=1,
+                        )
+                if intent.action_type == "support":
+                    target_id = str(intent.args.get("target_persona_id", "")).strip()
+                    if target_id:
+                        boost = 0.22 * max(0.1, float(intent.confidence))
+                        self._update_social_link(
+                            source_id=intent.persona_id,
+                            target_id=target_id,
+                            tick=tick,
+                            interaction="support",
+                            trust_delta=boost,
+                            support_delta=1,
+                        )
+                        self._update_social_link(
+                            source_id=target_id,
+                            target_id=intent.persona_id,
+                            tick=tick,
+                            interaction="supported_by_peer",
+                            trust_delta=boost * 0.45,
+                        )
+                if intent.action_type == "oppose":
+                    target_id = str(intent.args.get("target_persona_id", "")).strip()
+                    if target_id:
+                        drop = 0.25 * max(0.1, float(intent.confidence))
+                        self._update_social_link(
+                            source_id=intent.persona_id,
+                            target_id=target_id,
+                            tick=tick,
+                            interaction="oppose",
+                            trust_delta=-drop,
+                            oppose_delta=1,
+                        )
+                        self._update_social_link(
+                            source_id=target_id,
+                            target_id=intent.persona_id,
+                            tick=tick,
+                            interaction="opposed_by_peer",
+                            trust_delta=-(drop * 0.5),
+                        )
                 accepted.append(intent)
                 self._record_tick_event(
                     tick=tick,
@@ -432,29 +663,42 @@ class DeepSimulationEngine:
                     tick=tick,
                     event_type="intent_rejected",
                     source=f"engine:{intent.persona_id}",
-                    payload={"reason": reason, "intent": intent.model_dump()},
+                    payload={
+                        "reason": reason,
+                        "intent": intent.model_dump(),
+                        "tool": intent.requested_tool,
+                    },
                 )
                 self._record_timeline(tick, f"{intent.persona_id} intent rejected: {reason}", source="engine")
         if accepted:
             self.state.global_kpis = apply_intents_to_kpis(self.state.global_kpis, accepted)
-        return rejections
+        return accepted, rejections
 
     async def run_stream(self) -> AsyncIterator[dict[str, Any]]:
         yield {"type": "status", "message": "Deep simulation stream started.", "max_ticks": self.state.max_ticks}
         while not self.state.done:
             self.state.tick += 1
             tick = self.state.tick
+            self.state.pending_actions = []
+            self.state.resolved_actions = []
+            self.state.active_event = None
             personas = self.orchestrator.select_active_personas_for_tick(
                 tick=tick,
                 churn_risk=self.state.global_kpis.churn_risk,
             )
             active_ids = {persona.id for persona in personas}
             kpi_before = self.state.global_kpis.model_copy(deep=True)
+            self._set_phase("world")
             rolls = self._move_agents(tick=tick, active_persona_ids=active_ids)
             yield progress_event(
                 self.state,
                 f"Day {tick}: strategists rolled, moved districts, and are planning actions.",
             )
+            yield world_event(self.state)
+            self._set_phase("observe")
+            yield world_event(self.state)
+            self._set_phase("action")
+            yield world_event(self.state)
 
             candidate_intents: list[ActionIntent] = []
             for persona in personas:
@@ -496,6 +740,15 @@ class DeepSimulationEngine:
                         if isinstance(intent_payload, dict):
                             intent = ActionIntent.model_validate(intent_payload)
                             candidate_intents.append(intent)
+                            self.state.pending_actions.append(
+                                self._action_record_from_intent(
+                                    intent,
+                                    status="pending",
+                                    phase="action",
+                                    outcome="Queued for resolution.",
+                                )
+                            )
+                            self.state.pending_actions = self.state.pending_actions[-24:]
                             if agent is not None:
                                 agent.confidence = intent.confidence
                         if agent is not None and agent.status != "done":
@@ -503,11 +756,38 @@ class DeepSimulationEngine:
                         message = f"{persona.name} completed day-{tick} reaction."
                         self._record_timeline(tick, message, source=f"subagent:{persona.id}")
                         yield timeline_event(tick, message)
+                        yield world_event(self.state)
 
+            self._set_phase("resolution")
+            yield world_event(self.state)
             resolved = resolve_conflicts(candidate_intents, self.state.personas)
-            rejections = self._apply_resolved_intents(tick, resolved)
+            accepted, rejections = self._apply_resolved_intents(tick, resolved)
+            self.state.resolved_actions = [
+                self._action_record_from_intent(
+                    intent,
+                    status="resolved",
+                    phase="resolution",
+                    outcome="Applied to world state.",
+                )
+                for intent in accepted
+            ]
+            for rejection in rejections:
+                intent_payload = rejection.get("intent")
+                if isinstance(intent_payload, dict):
+                    intent = ActionIntent.model_validate(intent_payload)
+                    self.state.resolved_actions.append(
+                        self._action_record_from_intent(
+                            intent,
+                            status="rejected",
+                            phase="resolution",
+                            outcome=str(rejection.get("reason") or "Rejected by validator."),
+                        )
+                    )
+            self.state.pending_actions = []
             self._apply_zone_effects(tick, active_ids)
             crisis = self._run_crisis_phase(tick, resolved)
+            self._set_phase("scoring")
+            yield world_event(self.state)
             self._award_points(tick, active_ids, rolls, resolved, kpi_before, crisis)
             if resolved:
                 self._record_timeline(tick, f"Applied {len(resolved)} resolved intent(s).", source="engine")
@@ -519,6 +799,7 @@ class DeepSimulationEngine:
                     f"{crisis.get('title', 'Crisis')} changed market conditions this day.",
                     source="engine:crisis",
                 )
+            self._set_phase("summary")
 
             world_delta_event = self._record_tick_event(
                 tick=tick,
@@ -557,6 +838,7 @@ class DeepSimulationEngine:
 
             if tick >= self.state.max_ticks:
                 self.state.done = True
+                self._set_phase("complete")
                 for agent in self.state.agents:
                     agent.status = "done"
 

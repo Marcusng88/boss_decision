@@ -29,6 +29,7 @@ export interface DeepSimulatorStreamEvent {
     | "status"
     | "progress"
     | "world"
+    | "tick_event"
     | "agent_tool_call"
     | "agent_chunk"
     | "timeline"
@@ -44,6 +45,10 @@ export interface DeepSimulatorStreamEvent {
   tool_call?: string;
   chunk?: string;
   response?: Record<string, unknown>;
+  event_type?: string;
+  source?: string;
+  payload?: Record<string, unknown>;
+  ts?: string;
   error?: string;
 }
 

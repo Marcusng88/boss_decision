@@ -27,7 +27,8 @@ Markdown behavior contract:
 - Use inline code for metrics and literals like `revenue`, `+10%`.
 - Use LaTeX for math when helpful, for example `$Revenue = Price \\times Volume$`.
 - Do not emit raw JSON in final prose.
-- If the world state should change, call `submit_action_intent`.
+- If the world state should change, use game action tools (`move_to_zone`, `talk_to_agent`, `propose_strategy`,
+  `support_action`, `oppose_action`, `submit_action_intent`, `end_turn`).
 """
 
 
@@ -137,6 +138,32 @@ class DeepOrchestrator:
     def _build_tools(self, persona: PersonaProfile) -> list[Any]:
         allowed_roots = [Path(root).resolve() for root in persona.allowed_paths]
         persona_id = persona.id
+        scenario_zone_ids = {
+            str(item.get("id")).strip()
+            for item in self.scenario.get("map", {}).get("zones", [])
+            if isinstance(item, dict) and str(item.get("id", "")).strip()
+        }
+
+        def _queue_intent(
+            action_type: str,
+            args: dict[str, Any] | None,
+            confidence: float,
+            rationale_md: str,
+            requested_tool: str,
+        ) -> str:
+            sink = self._active_intent_sinks.setdefault(persona_id, [])
+            intent = ActionIntent(
+                persona_id=persona_id,
+                tick=0,
+                action_type=action_type,  # type: ignore[arg-type]
+                args=args or {},
+                confidence=max(0.0, min(1.0, float(confidence))),
+                rationale_md=rationale_md[:1200],
+                requested_via_tool=True,
+                requested_tool=requested_tool,
+            )
+            sink.append(intent)
+            return f"intent accepted for {persona_id}: {action_type}"
 
         @tool("read_allowed_file")
         def read_allowed_file(path: str, max_chars: int = 2400) -> str:
@@ -178,27 +205,117 @@ class DeepOrchestrator:
             confidence: float = 0.6,
             rationale_md: str = "",
         ) -> str:
-            """Submit a structured action intent for world-state updates."""
-            sink = self._active_intent_sinks.setdefault(persona_id, [])
+            """Submit a structured action intent for world-state updates (generic fallback)."""
             try:
                 args = json.loads(args_json) if args_json.strip() else {}
                 if not isinstance(args, dict):
                     args = {}
             except Exception:
                 args = {}
-            intent = ActionIntent(
-                persona_id=persona_id,
-                tick=0,
-                action_type=action_type,  # type: ignore[arg-type]
-                args=args,
-                confidence=max(0.0, min(1.0, float(confidence))),
-                rationale_md=rationale_md[:1200],
-                requested_via_tool=True,
-            )
-            sink.append(intent)
-            return f"intent accepted for {persona_id}: {action_type}"
+            return _queue_intent(action_type, args, confidence, rationale_md, "submit_action_intent")
 
-        return [internet_search, read_allowed_file, submit_action_intent]
+        @tool("move_to_zone")
+        def move_to_zone(zone_id: str, confidence: float = 0.7, rationale_md: str = "") -> str:
+            """Queue a legal move action to a named zone id."""
+            zid = zone_id.strip()
+            if not zid:
+                return "Rejected: zone_id is required."
+            if scenario_zone_ids and zid not in scenario_zone_ids:
+                return f"Rejected: unknown zone_id `{zid}`."
+            return _queue_intent("move", {"zone_id": zid}, confidence, rationale_md, "move_to_zone")
+
+        @tool("talk_to_agent")
+        def talk_to_agent(target_persona_id: str, message: str, intent: str = "negotiate", confidence: float = 0.6) -> str:
+            """Queue an in-world social interaction with another persona."""
+            target_id = target_persona_id.strip()
+            if not target_id:
+                return "Rejected: target_persona_id is required."
+            if not message.strip():
+                return "Rejected: message is required."
+            args = {
+                "target_persona_id": target_id,
+                "message": message[:500],
+                "intent": intent[:80] if intent else "negotiate",
+            }
+            return _queue_intent("talk", args, confidence, message, "talk_to_agent")
+
+        @tool("propose_strategy")
+        def propose_strategy(
+            strategy_type: str,
+            summary: str,
+            args_json: str = "{}",
+            confidence: float = 0.65,
+        ) -> str:
+            """Queue a strategic proposal (pricing/campaign/spend/procurement/etc)."""
+            strategy = strategy_type.strip()
+            if not strategy:
+                return "Rejected: strategy_type is required."
+            try:
+                args = json.loads(args_json) if args_json.strip() else {}
+                if not isinstance(args, dict):
+                    args = {}
+            except Exception:
+                args = {}
+            args["strategy_type"] = strategy
+            args["summary"] = summary[:240]
+            return _queue_intent("propose", args, confidence, summary, "propose_strategy")
+
+        @tool("support_action")
+        def support_action(target_persona_id: str = "", target_action_type: str = "", confidence: float = 0.55) -> str:
+            """Queue support for a persona or strategy action."""
+            args = {
+                "target_persona_id": target_persona_id.strip(),
+                "target_action_type": target_action_type.strip(),
+            }
+            return _queue_intent("support", args, confidence, "Supports another action.", "support_action")
+
+        @tool("oppose_action")
+        def oppose_action(target_persona_id: str = "", target_action_type: str = "", confidence: float = 0.55) -> str:
+            """Queue opposition to a persona or strategy action."""
+            args = {
+                "target_persona_id": target_persona_id.strip(),
+                "target_action_type": target_action_type.strip(),
+            }
+            return _queue_intent("oppose", args, confidence, "Opposes another action.", "oppose_action")
+
+        @tool("inspect_zone")
+        def inspect_zone(zone_id: str) -> str:
+            """Inspect zone metadata from scenario without mutating world state."""
+            zid = zone_id.strip()
+            if not zid:
+                return "Rejected: zone_id is required."
+            for item in self.scenario.get("map", {}).get("zones", []):
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("id", "")).strip() != zid:
+                    continue
+                effects = item.get("effects") if isinstance(item.get("effects"), dict) else {}
+                return json.dumps(
+                    {
+                        "id": zid,
+                        "name": str(item.get("name", zid)),
+                        "effects": effects,
+                    }
+                )
+            return f"Zone `{zid}` not found."
+
+        @tool("end_turn")
+        def end_turn(rationale_md: str = "No further action this turn.", confidence: float = 0.5) -> str:
+            """Finish this persona turn with a wait action."""
+            return _queue_intent("wait", {"summary": "End turn"}, confidence, rationale_md, "end_turn")
+
+        return [
+            internet_search,
+            read_allowed_file,
+            inspect_zone,
+            move_to_zone,
+            talk_to_agent,
+            propose_strategy,
+            support_action,
+            oppose_action,
+            submit_action_intent,
+            end_turn,
+        ]
 
     def _get_persona_agent(self, persona: PersonaProfile) -> Any:
         if persona.id in self._force_fallback_personas:
@@ -260,7 +377,8 @@ class DeepOrchestrator:
             "React to this simulation observation. "
             "Stream your analysis in markdown. "
             "Use tools when needed. "
-            "Only call `submit_action_intent` when you are proposing a concrete world action. "
+            "When you want to change world state, use explicit game tools (move/talk/propose/support/oppose/end_turn) "
+            "instead of only prose. "
             f"Observation: {json.dumps(observation.model_dump())}"
         )
         collected = ""
