@@ -1,6 +1,6 @@
-# Network Simulation Agent (Phase 3)
+# Network Simulation Agent (Phase 4)
 
-Phase-3 backend implementation for the network simulation feature.
+Phase-4 backend implementation for the network simulation feature.
 
 ## Implemented now
 
@@ -10,6 +10,9 @@ Phase-3 backend implementation for the network simulation feature.
     `edge_update`, `shock_event`, `observer_summary`, `final`, `done`
 - Session artifacts:
   - `backend/network_simulation_agent/runs/{session_id}/session_state.jsonl`
+  - `backend/network_simulation_agent/runs/{session_id}/final_report.json`
+  - `backend/network_simulation_agent/runs/{session_id}/observer_summary.md`
+  - `backend/network_simulation_agent/runs/{session_id}/graph_snapshot.json`
 - API integration points:
   - `POST /api/network-simulator/run`
   - `POST /api/network-simulator/stream`
@@ -19,8 +22,9 @@ Phase-3 backend implementation for the network simulation feature.
 - LLM world builder for dynamic node/persona/edge generation (with deterministic fallback).
 - LLM node-turn action generation with strict action normalization and validation.
 - Context grounding from local docs (`data_context_path`) and optional Tavily snippets.
+- Observer chat grounded to persisted run events with `seq`/`tick` citations.
 
-## Deferred to phase 4+
+## Deferred to phase 5+
 
-- Observer chat with explicit event-id citation grounding.
+- Observer LLM synthesis with mandatory citation validation against selected events.
 - Full Deep Agents tool runtime per node (current node turns are direct chat-model calls).

@@ -9,6 +9,7 @@ from .memory import SESSION_STATE_SCHEMA_VERSION
 from .memory import append_event
 from .memory import build_session_id
 from .memory import get_run_dir
+from .observer import persist_run_artifacts
 from .orchestrator import NetworkOrchestrator
 from .rules import validate_action
 from .schema import NetworkSimulatorRequest
@@ -361,6 +362,15 @@ class NetworkSimulationEngine:
             },
         )
         self._append_event(final_event, tick=self.request.max_ticks)
+        persist_run_artifacts(
+            base_dir=self.base_dir,
+            session_id=self.session_id,
+            query=self.request.query,
+            summary=summary_text,
+            kpis=self.kpis.copy(),
+            nodes=self.nodes,
+            edges=self.edges,
+        )
         yield final_event
 
         done = status_event("Network simulation stream completed.")

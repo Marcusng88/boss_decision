@@ -456,7 +456,7 @@ async def add_network_simulator_shock(session_id: str, request: NetworkShockRequ
 @app.post("/api/network-simulator/{session_id}/observer-chat")
 async def network_simulator_observer_chat(session_id: str, request: ObserverChatRequest):
     """
-    Return observer answer grounded to current phase-1 session artifacts.
+    Return observer answer grounded to persisted session artifacts.
     """
     try:
         _ensure_network_simulator_import_path()
@@ -464,11 +464,17 @@ async def network_simulator_observer_chat(session_id: str, request: ObserverChat
         from network_simulation_agent.src.observer import build_observer_answer
 
         summary = SESSION_STORE.get_observer_report(session_id)
-        if summary is None:
-            raise HTTPException(status_code=404, detail="Observer report not ready for this session.")
-
-        response = build_observer_answer(question=request.question, summary=summary)
+        backend_root = Path(__file__).resolve().parent
+        base_dir = backend_root / "network_simulation_agent"
+        response = build_observer_answer(
+            base_dir=base_dir,
+            session_id=session_id,
+            question=request.question,
+            summary=summary or "",
+        )
         return {"status": "ok", "session_id": session_id, **response}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
