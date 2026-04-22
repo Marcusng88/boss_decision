@@ -14,6 +14,7 @@ dependencies = [
     "langchain-mcp-adapters>=0.2.2",
     "langchain-openai",
     "openai",
+    "pillow>=12.2.0",
     "psycopg2-binary",
     "pydantic",
     "pydantic-settings",
