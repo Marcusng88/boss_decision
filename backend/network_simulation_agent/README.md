@@ -1,11 +1,11 @@
-# Network Simulation Agent (Phase 1)
+# Network Simulation Agent (Phase 3)
 
-Phase-1 backend skeleton for the network simulation feature.
+Phase-3 backend implementation for the network simulation feature.
 
 ## Implemented now
 
 - Contracts and schemas for request/shock/chat payloads.
-- Deterministic mock tick stream with NDJSON event types:
+- NDJSON tick stream with event types:
   - `status`, `progress`, `network_state`, `node_action`, `node_message`,
     `edge_update`, `shock_event`, `observer_summary`, `final`, `done`
 - Session artifacts:
@@ -15,9 +15,12 @@ Phase-1 backend skeleton for the network simulation feature.
   - `POST /api/network-simulator/stream`
   - `POST /api/network-simulator/{session_id}/shock`
   - `POST /api/network-simulator/{session_id}/observer-chat`
+- Real tick engine with deterministic KPI/edge transitions.
+- LLM world builder for dynamic node/persona/edge generation (with deterministic fallback).
+- LLM node-turn action generation with strict action normalization and validation.
+- Context grounding from local docs (`data_context_path`) and optional Tavily snippets.
 
-## Deferred to phase 2+
+## Deferred to phase 4+
 
-- Real deterministic world-transition math.
-- Persistent shock queue + replay guarantees.
-- LLM-driven node turns and observer grounding with event ids.
+- Observer chat with explicit event-id citation grounding.
+- Full Deep Agents tool runtime per node (current node turns are direct chat-model calls).

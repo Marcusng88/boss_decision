@@ -235,20 +235,21 @@ export function NetworkSimulationSection() {
     };
   }, []);
 
+  function appendSessionEvent(event: SessionEvent) {
+    setEvents((prev) => [event, ...prev].slice(0, 220));
+  }
+
   function applyStreamEvent(event: NetworkSimulatorStreamEvent) {
     if (event.session_id) setSessionId(event.session_id);
     if (event.type === "status") {
       const message = typeof event.message === "string" ? event.message : "status";
-      setEvents((prev) => [
-        {
-          id: `status_${Math.random().toString(36).slice(2, 8)}`,
-          day: currentDay,
-          source: "System",
-          kind: "message",
-          summary: message,
-        },
-        ...prev,
-      ].slice(0, 220));
+      appendSessionEvent({
+        id: `status_${Math.random().toString(36).slice(2, 8)}`,
+        day: currentDay,
+        source: "System",
+        kind: "message",
+        summary: message,
+      });
       return;
     }
 
@@ -307,16 +308,13 @@ export function NetworkSimulationSection() {
       const sourceId = String(action?.source_node_id ?? "unknown");
       const actionLabel = String(action?.action_type ?? "action");
       const rationale = String(action?.rationale ?? "");
-      setEvents((prev) => [
-        {
-          id: `evt_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
-          day: event.tick ?? 0,
-          source: sourceId,
-          kind: "action",
-          summary: `${actionLabel}${rationale ? `: ${rationale}` : ""}`,
-        },
-        ...prev,
-      ].slice(0, 220));
+      appendSessionEvent({
+        id: `evt_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
+        day: event.tick ?? 0,
+        source: sourceId,
+        kind: "action",
+        summary: `${actionLabel}${rationale ? `: ${rationale}` : ""}`,
+      });
       setNodes((prev) =>
         prev.map((node) =>
           node.id === sourceId
@@ -329,16 +327,13 @@ export function NetworkSimulationSection() {
 
     if (event.type === "node_message") {
       const message = event.message as { node_id?: string; text?: string } | undefined;
-      setEvents((prev) => [
-        {
-          id: `msg_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
-          day: event.tick ?? 0,
-          source: String(message?.node_id ?? "node"),
-          kind: "message",
-          summary: String(message?.text ?? "node message"),
-        },
-        ...prev,
-      ].slice(0, 220));
+      appendSessionEvent({
+        id: `msg_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
+        day: event.tick ?? 0,
+        source: String(message?.node_id ?? "node"),
+        kind: "message",
+        summary: String(message?.text ?? "node message"),
+      });
       return;
     }
 
@@ -357,32 +352,26 @@ export function NetworkSimulationSection() {
 
     if (event.type === "shock_event") {
       const shock = event.shock as { summary?: string } | undefined;
-      setEvents((prev) => [
-        {
-          id: `shock_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
-          day: event.tick ?? 0,
-          source: "User",
-          kind: "shock",
-          summary: String(shock?.summary ?? "Shock injected"),
-        },
-        ...prev,
-      ].slice(0, 220));
+      appendSessionEvent({
+        id: `shock_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
+        day: event.tick ?? 0,
+        source: "User",
+        kind: "shock",
+        summary: String(shock?.summary ?? "Shock injected"),
+      });
       return;
     }
 
     if (event.type === "observer_summary") {
       setObserverReport(event.summary ?? "Observer summary unavailable.");
       setObserverReady(true);
-      setEvents((prev) => [
-        {
-          id: `obs_${Math.random().toString(36).slice(2, 8)}`,
-          day: currentDay,
-          source: "Observer",
-          kind: "observer",
-          summary: event.summary ?? "Observer summary",
-        },
-        ...prev,
-      ].slice(0, 220));
+      appendSessionEvent({
+        id: `obs_${Math.random().toString(36).slice(2, 8)}`,
+        day: currentDay,
+        source: "Observer",
+        kind: "observer",
+        summary: event.summary ?? "Observer summary",
+      });
       return;
     }
 

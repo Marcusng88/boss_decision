@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_NETWORK_MODEL = "google_genai:gemini-3.1-flash-lite-preview"
+_MODEL_CACHE: dict[str, Any] = {}
+_MODEL_INIT_ATTEMPTS: set[str] = set()
+
+
+def _load_env() -> None:
+    """Load backend env files and normalize provider-specific key aliases."""
+    backend_root = Path(__file__).resolve().parents[2]
+    load_dotenv(backend_root / ".env", override=False)
+
+    google_key = os.getenv("GOOGLE_API_KEY")
+    if google_key and not os.getenv("GEMINI_API_KEY"):
+        os.environ["GEMINI_API_KEY"] = google_key
+
+
+def _infer_default_model() -> str:
+    """Infer a model identifier from available provider credentials."""
+    _load_env()
+    if os.getenv("NETWORK_SIM_MODEL"):
+        return os.getenv("NETWORK_SIM_MODEL", DEFAULT_NETWORK_MODEL)
+    if os.getenv("OPENAI_API_KEY"):
+        model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+        return model if ":" in model else f"openai:{model}"
+    if os.getenv("GOOGLE_API_KEY"):
+        return "google_genai:gemini-3.1-flash-lite-preview"
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return "anthropic:claude-3-5-sonnet-latest"
+    return DEFAULT_NETWORK_MODEL
+
+
+def _get_model(model_name: str) -> Any:
+    """Initialize and cache a chat model; return `None` if initialization fails."""
+    _load_env()
+    if model_name in _MODEL_INIT_ATTEMPTS:
+        return _MODEL_CACHE.get(model_name)
+    _MODEL_INIT_ATTEMPTS.add(model_name)
+    try:
+        from langchain.chat_models import init_chat_model
+
+        _MODEL_CACHE[model_name] = init_chat_model(model=model_name, temperature=0)
+    except Exception as exc:
+        logger.warning("Network simulator model init failed for '%s': %s", model_name, exc)
+        _MODEL_CACHE[model_name] = None
+    return _MODEL_CACHE[model_name]
+
+
+def get_world_builder_model() -> Any:
+    """Return model used for generating scenario-specific nodes/edges/personas."""
+    return _get_model(os.getenv("NETWORK_WORLD_MODEL", _infer_default_model()))
+
+
+def get_node_turn_model() -> Any:
+    """Return model used for per-node action generation."""
+    return _get_model(os.getenv("NETWORK_NODE_MODEL", _infer_default_model()))
