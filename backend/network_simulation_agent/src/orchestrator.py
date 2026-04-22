@@ -61,6 +61,34 @@ class NodeActionOutput(BaseModel):
     message: str
 
 
+class NodeNarrativeImpact(BaseModel):
+    """Simple directional impact signal for non-technical UI communication."""
+
+    direction: str
+    note: str
+
+
+class NodeNarrativeOutput(BaseModel):
+    """Structured storytelling + business summary emitted per completed node turn."""
+
+    headline: str
+    summary_short: str
+    reason: str
+    watch_next: str
+    confidence_band: str
+    sales: NodeNarrativeImpact
+    cost: NodeNarrativeImpact
+    risk: NodeNarrativeImpact
+    full_response_md: str
+
+
+class NodeTurnOutput(BaseModel):
+    """Combined typed output for one node turn."""
+
+    action: NodeActionOutput
+    narrative: NodeNarrativeOutput
+
+
 class NetworkOrchestrator:
     """LLM orchestration for world building and per-node turn decisions."""
 
@@ -99,8 +127,8 @@ class NetworkOrchestrator:
         edges: list[dict[str, Any]],
         kpis: dict[str, float],
         recent_events: list[dict[str, Any]],
-    ) -> tuple[dict[str, Any], str]:
-        """Generate one node action and companion message from LLM or fallback."""
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Generate one node action and companion narrative from LLM or fallback."""
         action_output = self._build_node_turn_with_llm(
             tick=tick,
             node=node,
@@ -125,20 +153,28 @@ class NetworkOrchestrator:
                 },
                 node_ids=node_ids,
             )
-            return action, str(fallback["message"])
+            return action, self._fallback_node_narrative(node=node, fallback=fallback, kpis=kpis, tick=tick)
 
         action = normalize_action(
             {
-                "action_type": action_output.action_type,
+                "action_type": action_output.action.action_type,
                 "source_node_id": source_id,
-                "target_node_id": action_output.target_node_id,
-                "payload": action_output.payload,
-                "rationale": action_output.rationale,
-                "confidence": action_output.confidence,
+                "target_node_id": action_output.action.target_node_id,
+                "payload": action_output.action.payload,
+                "rationale": action_output.action.rationale,
+                "confidence": action_output.action.confidence,
             },
             node_ids=node_ids,
         )
-        return action, action_output.message
+        narrative = self._normalize_narrative(
+            node=node,
+            tick=tick,
+            kpis=kpis,
+            action=action,
+            narrative=action_output.narrative.model_dump(mode="json"),
+            fallback_message=action_output.action.message,
+        )
+        return action, narrative
 
     def _build_world_with_llm(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
         """Ask the world-builder LLM to generate nodes, edges, and persona text."""
@@ -182,8 +218,8 @@ class NetworkOrchestrator:
         edges: list[dict[str, Any]],
         kpis: dict[str, float],
         recent_events: list[dict[str, Any]],
-    ) -> NodeActionOutput | None:
-        """Ask node-turn LLM for a typed action and explanatory message."""
+    ) -> NodeTurnOutput | None:
+        """Ask node-turn LLM for a typed action and explanatory narrative."""
         if self.node_model is None:
             return None
 
@@ -201,14 +237,22 @@ class NetworkOrchestrator:
             f"Current KPI deltas: {json.dumps(kpis, ensure_ascii=True)}\n"
             f"Connected edges: {json.dumps(nearby_edges, ensure_ascii=True)}\n"
             f"Recent events: {json.dumps(recent_events[-12:], ensure_ascii=True)}\n"
-            "Action constraints:\n"
-            "- action_type must be one of observe, message, price_adjust, budget_shift, negotiate_supply, "
+            "Output constraints:\n"
+            "- action.action_type must be one of observe, message, price_adjust, budget_shift, negotiate_supply, "
             "community_campaign, risk_mitigation, wait\n"
-            "- keep payload compact and numeric where possible\n"
-            "- confidence must be in [0,1]\n"
-            "- message should be 1 sentence from this node's perspective\n"
+            "- action.payload should be compact and numeric where possible\n"
+            "- action.confidence must be in [0,1]\n"
+            "- action.message should be 1 short sentence from this node's perspective\n"
+            "- narrative should be understandable by non-technical users\n"
+            "- narrative confidence_band must be one of low, medium, high\n"
+            "- impact directions must be one of up, down, stable\n"
+            "- full_response_md must be valid markdown and include: what happened, why, and what to watch next\n"
+            "Writing style:\n"
+            "- first-person persona voice for storytelling\n"
+            "- business plain language for consequences (sales, cost, risk)\n"
+            "- avoid technical API/schema terms\n"
         )
-        return self._invoke_validated_json(self.node_model, prompt, NodeActionOutput)
+        return self._invoke_validated_json(self.node_model, prompt, NodeTurnOutput)
 
     def _fallback_world(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Generate deterministic non-LLM world so runtime remains functional without model access."""
@@ -270,6 +314,109 @@ class NetworkOrchestrator:
             "rationale": f"{node.get('label', node.get('node_id', 'Node'))} selected {action_type} under local pressure.",
             "confidence": round(self.rng.uniform(0.45, 0.9), 3),
             "message": f"{node.get('label', 'Node')} is responding to current market pressure with {action_type}.",
+        }
+
+    def _fallback_node_narrative(
+        self,
+        node: dict[str, Any],
+        fallback: dict[str, Any],
+        kpis: dict[str, float],
+        tick: int,
+    ) -> dict[str, Any]:
+        """Build non-technical narrative fallback when node LLM output is unavailable."""
+        label = str(node.get("label", "Node"))
+        action_type = str(fallback.get("action_type", "observe"))
+        message = str(fallback.get("message", f"{label} is adapting to market changes."))
+        return self._normalize_narrative(
+            node=node,
+            tick=tick,
+            kpis=kpis,
+            action={
+                "action_type": action_type,
+                "rationale": str(fallback.get("rationale", "")),
+                "confidence": fallback.get("confidence", 0.6),
+            },
+            narrative={
+                "headline": f"{label} made a move",
+                "summary_short": message[:160],
+                "reason": str(fallback.get("rationale", "Responding to market pressure."))[:180],
+                "watch_next": "Watch customer response and supplier stability next turn.",
+                "confidence_band": "medium",
+                "sales": {"direction": "up" if kpis.get("revenue_delta", 0.0) >= 0 else "down", "note": "Sales momentum is shifting."},
+                "cost": {"direction": "stable", "note": "Costs remain manageable for now."},
+                "risk": {"direction": "up" if kpis.get("risk_delta", 0.0) > 0 else "stable", "note": "Risk needs active monitoring."},
+                "full_response_md": (
+                    f"### {label} update (Day {tick})\n"
+                    f"I chose **{action_type}**. {message}\n\n"
+                    f"**Why now:** {str(fallback.get('rationale', 'Current pressure required action.'))}\n\n"
+                    f"**What to watch next:** Customer reaction and supply continuity."
+                ),
+            },
+            fallback_message=message,
+        )
+
+    def _normalize_narrative(
+        self,
+        node: dict[str, Any],
+        tick: int,
+        kpis: dict[str, float],
+        action: dict[str, Any],
+        narrative: dict[str, Any],
+        fallback_message: str,
+    ) -> dict[str, Any]:
+        """Normalize LLM narrative fields to a stable UI contract."""
+        label = str(node.get("label", "Node"))
+        action_type = str(action.get("action_type", "observe"))
+        confidence = float(action.get("confidence", 0.6) or 0.6)
+        confidence_band = str(narrative.get("confidence_band", "")).strip().lower()
+        if confidence_band not in {"low", "medium", "high"}:
+            if confidence >= 0.75:
+                confidence_band = "high"
+            elif confidence >= 0.45:
+                confidence_band = "medium"
+            else:
+                confidence_band = "low"
+
+        def _impact_value(key: str, default_direction: str, default_note: str) -> dict[str, str]:
+            raw = narrative.get(key)
+            direction = default_direction
+            note = default_note
+            if isinstance(raw, dict):
+                direction = str(raw.get("direction", default_direction)).strip().lower()
+                note = str(raw.get("note", default_note)).strip()[:160]
+            if direction not in {"up", "down", "stable"}:
+                direction = default_direction
+            return {"direction": direction, "note": note or default_note}
+
+        return {
+            "headline": str(narrative.get("headline", f"{label} reacts to market pressure")).strip()[:120],
+            "summary_short": str(narrative.get("summary_short", fallback_message)).strip()[:220],
+            "reason": str(narrative.get("reason", action.get("rationale", "Responding to local conditions."))).strip()[:220],
+            "watch_next": str(narrative.get("watch_next", "Track sentiment, supplier pressure, and competitor response.")).strip()[:180],
+            "confidence_band": confidence_band,
+            "sales": _impact_value(
+                "sales",
+                "up" if float(kpis.get("revenue_delta", 0.0)) >= 0 else "down",
+                "Sales direction may shift if this move lands well.",
+            ),
+            "cost": _impact_value(
+                "cost",
+                "up" if float(kpis.get("cost_delta", 0.0)) > 0 else "stable",
+                "Costs need monitoring during rollout.",
+            ),
+            "risk": _impact_value(
+                "risk",
+                "up" if float(kpis.get("risk_delta", 0.0)) > 0 else "stable",
+                "Risk remains manageable but should be watched.",
+            ),
+            "full_response_md": str(
+                narrative.get(
+                    "full_response_md",
+                    f"### {label} update (Day {tick})\nI decided to **{action_type}**.\n\n"
+                    f"**Why:** {str(action.get('rationale', 'Current conditions required a measured response.'))}\n\n"
+                    f"**What to watch next:** {str(narrative.get('watch_next', 'Customer response and supply continuity.'))}",
+                )
+            ).strip()[:2400],
         }
 
     def _sanitize_nodes(self, raw_nodes: list[WorldNodeSpec]) -> list[dict[str, Any]]:

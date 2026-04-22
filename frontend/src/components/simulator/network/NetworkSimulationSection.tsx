@@ -27,6 +27,8 @@ interface NetworkNode {
   id: string;
   label: string;
   type: NodeType;
+  buildingIcon: string;
+  personaIcon: string;
   x: number;
   y: number;
   vx: number;
@@ -92,6 +94,8 @@ const SHOCK_CATALOG = [
 
 const INITIAL_QUERY = "Can I increase my price by 10% without damaging retention?";
 const DEFAULT_DAYS = 16;
+const BUILDING_ICON_COUNT = 60;
+const PERSONA_ICON_COUNT = 49;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -99,6 +103,34 @@ function clamp(value: number, min: number, max: number): number {
 
 function randomPick<T>(rows: T[]): T {
   return rows[Math.floor(Math.random() * rows.length)];
+}
+
+function stableHash(value: string): number {
+  let hash = 0;
+  for (let idx = 0; idx < value.length; idx += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(idx);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function buildingIconPath(index: number): string {
+  return `/assets/buildings/building_${String(index + 1).padStart(2, "0")}.png`;
+}
+
+function personaIconPath(index: number): string {
+  return `/assets/personas/persona_${String(index + 1).padStart(2, "0")}.png`;
+}
+
+function pickNodeIcons(nodeId: string, type: NodeType): { buildingIcon: string; personaIcon: string } {
+  const typeSeed = stableHash(type);
+  const nodeSeed = stableHash(nodeId);
+  const buildingIndex = (typeSeed + nodeSeed) % BUILDING_ICON_COUNT;
+  const personaIndex = nodeSeed % PERSONA_ICON_COUNT;
+  return {
+    buildingIcon: buildingIconPath(buildingIndex),
+    personaIcon: personaIconPath(personaIndex),
+  };
 }
 
 function asNodeType(value: string): NodeType {
@@ -137,6 +169,7 @@ function buildInitialNodes(): NetworkNode[] {
   const radius = 195;
 
   return definitions.map(([id, label, type], idx) => {
+    const icons = pickNodeIcons(id, type);
     const angle = (idx / definitions.length) * Math.PI * 2;
     const jitterX = (Math.random() - 0.5) * 42;
     const jitterY = (Math.random() - 0.5) * 42;
@@ -144,6 +177,7 @@ function buildInitialNodes(): NetworkNode[] {
       id,
       label,
       type,
+      ...icons,
       x: centerX + Math.cos(angle) * radius + jitterX,
       y: centerY + Math.sin(angle) * radius + jitterY,
       vx: 0,
@@ -267,18 +301,23 @@ export function NetworkSimulationSection() {
 
       if (state?.nodes) {
         setNodes(
-          state.nodes.map((node) => ({
-            id: String(node.node_id ?? ""),
-            label: String(node.label ?? node.node_id ?? "Node"),
-            type: asNodeType(String(node.node_type ?? "business")),
-            x: Number(node.x ?? 120),
-            y: Number(node.y ?? 120),
-            vx: 0,
-            vy: 0,
-            influence: Number(node.influence ?? 0.5),
-            status: asNodeStatus(String(node.status ?? "stable")),
-            lastAction: "awaiting action",
-          })),
+          state.nodes.map((node) => {
+            const id = String(node.node_id ?? "");
+            const type = asNodeType(String(node.node_type ?? "business"));
+            return {
+              id,
+              label: String(node.label ?? node.node_id ?? "Node"),
+              type,
+              ...pickNodeIcons(id, type),
+              x: Number(node.x ?? 120),
+              y: Number(node.y ?? 120),
+              vx: 0,
+              vy: 0,
+              influence: Number(node.influence ?? 0.5),
+              status: asNodeStatus(String(node.status ?? "stable")),
+              lastAction: "awaiting action",
+            };
+          }),
         );
       }
       if (state?.edges) {
@@ -495,7 +534,7 @@ export function NetworkSimulationSection() {
     dragCanvasRef.current.active = false;
   }
 
-  function handleNodePointerDown(event: ReactPointerEvent<SVGCircleElement>, nodeId: string) {
+  function handleNodePointerDown(event: ReactPointerEvent<SVGElement>, nodeId: string) {
     event.stopPropagation();
     dragNodeRef.current = { nodeId, pointerId: event.pointerId };
     setSelectedNodeId(nodeId);
@@ -664,7 +703,9 @@ export function NetworkSimulationSection() {
               {nodes.map((node) => {
                 const style = NODE_TYPE_STYLE[node.type];
                 const isSelected = selectedNode?.id === node.id;
-                const radius = isSelected ? 15 : 11 + node.influence * 5;
+                const radius = isSelected ? 31 : 25 + node.influence * 5;
+                const iconSize = isSelected ? 52 : 44;
+                const personaSize = isSelected ? 22 : 18;
                 return (
                   <g key={node.id} onClick={() => setSelectedNodeId(node.id)}>
                     <circle
@@ -682,6 +723,30 @@ export function NetworkSimulationSection() {
                       fill={style.color}
                       stroke={isSelected ? "#111827" : "rgba(17,24,39,0.4)"}
                       strokeWidth={isSelected ? 2.4 : 1.1}
+                      opacity={0.35}
+                    />
+                    <image
+                      href={node.buildingIcon}
+                      x={node.x - iconSize / 2}
+                      y={node.y - iconSize / 2}
+                      width={iconSize}
+                      height={iconSize}
+                      style={{ imageRendering: "pixelated", pointerEvents: "none" }}
+                    />
+                    <image
+                      href={node.personaIcon}
+                      x={node.x + iconSize / 2 - personaSize}
+                      y={node.y - iconSize / 2 - personaSize * 0.25}
+                      width={personaSize}
+                      height={personaSize}
+                      style={{ imageRendering: "pixelated", pointerEvents: "none" }}
+                    />
+                    <circle
+                      cx={node.x}
+                      cy={node.y}
+                      r={radius}
+                      fill="transparent"
+                      stroke="transparent"
                       onPointerDown={(event) => handleNodePointerDown(event, node.id)}
                       style={{ cursor: "grab" }}
                     />

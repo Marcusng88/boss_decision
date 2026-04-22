@@ -265,7 +265,7 @@ class NetworkSimulationEngine:
                 actor = node_lookup.get(actor_id)
                 if actor is None:
                     continue
-                action_payload, node_message = self.orchestrator.build_node_turn(
+                action_payload, node_narrative = self.orchestrator.build_node_turn(
                     tick=tick,
                     node=actor,
                     nodes=self.nodes,
@@ -303,7 +303,8 @@ class NetworkSimulationEngine:
                     tick=tick,
                     message={
                         "node_id": str(resolved_action.get("source_node_id", actor_id)),
-                        "text": node_message,
+                        "text": str(node_narrative.get("summary_short", "")),
+                        "narrative": node_narrative,
                     },
                 )
                 self._append_event(message_event, tick=tick)
