@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pydantic import Field
@@ -479,6 +480,31 @@ async def network_simulator_observer_chat(session_id: str, request: ObserverChat
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Observer chat failed: {str(e)}")
+
+
+@app.get("/api/network-simulator/{session_id}/storyline")
+async def download_network_simulator_storyline(session_id: str):
+    """
+    Download final storyline markdown artifact for a completed network simulation session.
+    """
+    try:
+        _ensure_network_simulator_import_path()
+        from network_simulation_agent.src.observer import storyline_path
+
+        backend_root = Path(__file__).resolve().parent
+        base_dir = backend_root / "network_simulation_agent"
+        target = storyline_path(base_dir=base_dir, session_id=session_id)
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="Storyline artifact not found for this session.")
+        return FileResponse(
+            path=target,
+            filename=f"{session_id}_storyline.md",
+            media_type="text/markdown; charset=utf-8",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Storyline download failed: {str(e)}")
 
 
 # ============================================

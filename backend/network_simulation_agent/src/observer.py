@@ -11,6 +11,7 @@ from .memory import read_events
 FINAL_REPORT_FILENAME = "final_report.json"
 OBSERVER_SUMMARY_FILENAME = "observer_summary.md"
 GRAPH_SNAPSHOT_FILENAME = "graph_snapshot.json"
+STORYLINE_FILENAME = "storyline.md"
 
 
 def persist_run_artifacts(
@@ -46,6 +47,19 @@ def persist_run_artifacts(
     (run_dir / OBSERVER_SUMMARY_FILENAME).write_text(summary, encoding="utf-8")
     graph_snapshot = {"session_id": session_id, "nodes": nodes, "edges": edges}
     (run_dir / GRAPH_SNAPSHOT_FILENAME).write_text(json.dumps(graph_snapshot, indent=2), encoding="utf-8")
+    storyline = build_storyline_markdown(
+        base_dir=base_dir,
+        session_id=session_id,
+        query=query,
+        final_summary=summary,
+        kpis=kpis,
+    )
+    (run_dir / STORYLINE_FILENAME).write_text(storyline, encoding="utf-8")
+
+
+def storyline_path(base_dir: Path, session_id: str) -> Path:
+    """Return absolute path to storyline markdown artifact for one session."""
+    return get_run_dir(base_dir, session_id) / STORYLINE_FILENAME
 
 
 def build_observer_answer(base_dir: Path, session_id: str, question: str, summary: str = "") -> dict[str, Any]:
@@ -78,6 +92,87 @@ def build_observer_answer(base_dir: Path, session_id: str, question: str, summar
         "answer": answer_text,
         "citations": citations,
     }
+
+
+def build_storyline_markdown(
+    base_dir: Path,
+    session_id: str,
+    query: str,
+    final_summary: str,
+    kpis: dict[str, float],
+) -> str:
+    """Build human-readable simulation storyline markdown from canonical events."""
+    events = read_events(base_dir=base_dir, session_id=session_id, max_events=2400)
+    node_turns: list[dict[str, Any]] = []
+    shocks: list[dict[str, Any]] = []
+    for item in events:
+        event = item.get("event")
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "node_message":
+            message = event.get("message")
+            if isinstance(message, dict) and isinstance(message.get("narrative"), dict):
+                node_turns.append(
+                    {
+                        "tick": item.get("tick"),
+                        "node_id": message.get("node_id"),
+                        "narrative": message.get("narrative"),
+                    }
+                )
+        if event.get("type") == "shock_event":
+            shock = event.get("shock")
+            if isinstance(shock, dict):
+                shocks.append({"tick": item.get("tick"), **shock})
+
+    recent_turns = node_turns[-40:]
+    revenue = float(kpis.get("revenue_delta", 0.0))
+    cost = float(kpis.get("cost_delta", 0.0))
+    risk = float(kpis.get("risk_delta", 0.0))
+    lines = [
+        "# Network Simulation Storyline",
+        "",
+        "## Scenario",
+        query,
+        "",
+        "## Final Outcome",
+        final_summary,
+        "",
+        f"- Revenue delta: {revenue:+.2%}",
+        f"- Cost delta: {cost:+.2%}",
+        f"- Risk delta: {risk:+.2%}",
+        "",
+    ]
+    if shocks:
+        lines.extend(["## Shock Events", ""])
+        for shock in shocks[-12:]:
+            lines.append(
+                f"- Day {shock.get('tick', '?')}: {str(shock.get('summary', 'Shock injected')).strip()}"
+            )
+        lines.append("")
+
+    lines.extend(["## Timeline Highlights", ""])
+    if not recent_turns:
+        lines.append("- No node-turn narrative was captured for this run.")
+    else:
+        for turn in recent_turns:
+            narrative = turn.get("narrative") if isinstance(turn.get("narrative"), dict) else {}
+            day = turn.get("tick", "?")
+            headline = str(narrative.get("headline", "Node reacted to market conditions")).strip()
+            summary_short = str(narrative.get("summary_short", "")).strip()
+            reason = str(narrative.get("reason", "")).strip()
+            watch_next = str(narrative.get("watch_next", "")).strip()
+            node_id = str(turn.get("node_id", "node")).strip()
+            lines.append(f"### Day {day} · {node_id}")
+            lines.append(f"**{headline}**")
+            if summary_short:
+                lines.append(summary_short)
+            if reason:
+                lines.append(f"- Why: {reason}")
+            if watch_next:
+                lines.append(f"- Watch next: {watch_next}")
+            lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
 
 
 def _extract_final_result(events: list[dict[str, Any]]) -> dict[str, Any]:

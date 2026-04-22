@@ -1,23 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent } from "react";
-import {
-  AlertTriangle,
-  Bot,
-  ChartLine,
-  Compass,
-  MessageSquareText,
-  Network,
-  Pause,
-  Play,
-  Plus,
-  Send,
-  ShieldCheck,
-  Sparkles,
-} from "lucide-react";
+import { Compass, Download, Network, Pause, Play, Plus, Send, Sparkles, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { chatNetworkObserver, injectNetworkShock, streamNetworkSimulator, type NetworkSimulatorStreamEvent } from "@/lib/simulator-client";
+import {
+  chatNetworkObserver,
+  downloadNetworkStoryline,
+  injectNetworkShock,
+  streamNetworkSimulator,
+  type NetworkSimulatorStreamEvent,
+} from "@/lib/simulator-client";
 
 type NodeType = "business" | "consumer" | "supplier" | "competitor" | "community" | "bank" | "regulator" | "platform";
 type EdgeType = "transaction" | "influence" | "trust" | "dependency" | "information";
@@ -47,23 +42,26 @@ interface NetworkEdge {
   lastTick: number;
 }
 
-interface SessionEvent {
-  id: string;
-  day: number;
-  source: string;
-  kind: "action" | "message" | "shock" | "observer";
-  summary: string;
-}
-
 interface ChatMessage {
   role: "user" | "observer";
   text: string;
 }
 
-interface NetworkKpis {
-  revenue_delta: number;
-  cost_delta: number;
-  risk_delta: number;
+interface NarrativeImpact {
+  direction: "up" | "down" | "stable";
+  note: string;
+}
+
+interface NodeNarrative {
+  headline: string;
+  summary_short: string;
+  reason: string;
+  watch_next: string;
+  confidence_band: "low" | "medium" | "high";
+  sales: NarrativeImpact;
+  cost: NarrativeImpact;
+  risk: NarrativeImpact;
+  full_response_md: string;
 }
 
 const NODE_TYPE_STYLE: Record<NodeType, { color: string; ring: string }> = {
@@ -148,6 +146,46 @@ function asNodeStatus(value: string): NodeStatus {
   return "stable";
 }
 
+function formatNodeType(type: NodeType): string {
+  return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
+function formatDirection(value: "up" | "down" | "stable"): string {
+  if (value === "up") return "up";
+  if (value === "down") return "down";
+  return "stable";
+}
+
+function normalizeNarrative(raw: unknown): NodeNarrative | null {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Record<string, unknown>;
+  const normalizeImpact = (value: unknown): NarrativeImpact => {
+    if (!value || typeof value !== "object") {
+      return { direction: "stable", note: "No clear signal yet." };
+    }
+    const impact = value as Record<string, unknown>;
+    const directionRaw = String(impact.direction ?? "stable").toLowerCase();
+    const direction = directionRaw === "up" || directionRaw === "down" ? directionRaw : "stable";
+    return {
+      direction,
+      note: String(impact.note ?? "No clear signal yet."),
+    };
+  };
+  const confidenceRaw = String(source.confidence_band ?? "medium").toLowerCase();
+  const confidence = confidenceRaw === "low" || confidenceRaw === "high" ? confidenceRaw : "medium";
+  return {
+    headline: String(source.headline ?? "Node update"),
+    summary_short: String(source.summary_short ?? "Node responded to the current conditions."),
+    reason: String(source.reason ?? "Local pressures shaped this response."),
+    watch_next: String(source.watch_next ?? "Watch market response in the next turn."),
+    confidence_band: confidence,
+    sales: normalizeImpact(source.sales),
+    cost: normalizeImpact(source.cost),
+    risk: normalizeImpact(source.risk),
+    full_response_md: String(source.full_response_md ?? "No detailed response was produced."),
+  };
+}
+
 function buildInitialNodes(): NetworkNode[] {
   const definitions: Array<[string, string, NodeType]> = [
     ["n_business_hq", "SME HQ", "business"],
@@ -216,14 +254,6 @@ function buildInitialEdges(): NetworkEdge[] {
   }));
 }
 
-function nodeById(nodes: NetworkNode[], id: string): NetworkNode | undefined {
-  return nodes.find((item) => item.id === id);
-}
-
-function formatNodeType(type: NodeType): string {
-  return type.charAt(0).toUpperCase() + type.slice(1);
-}
-
 export function NetworkSimulationSection() {
   const [query, setQuery] = useState(INITIAL_QUERY);
   const [maxDays, setMaxDays] = useState(DEFAULT_DAYS);
@@ -233,18 +263,17 @@ export function NetworkSimulationSection() {
   const [streamError, setStreamError] = useState<string | null>(null);
   const [nodes, setNodes] = useState<NetworkNode[]>(() => buildInitialNodes());
   const [edges, setEdges] = useState<NetworkEdge[]>(() => buildInitialEdges());
-  const [events, setEvents] = useState<SessionEvent[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState("n_business_hq");
+  const [activeDialogNodeId, setActiveDialogNodeId] = useState<string | null>(null);
   const [observerReport, setObserverReport] = useState("");
   const [observerReady, setObserverReady] = useState(false);
-  const [kpis, setKpis] = useState<NetworkKpis>({ revenue_delta: 0, cost_delta: 0, risk_delta: 0 });
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [nodeNarratives, setNodeNarratives] = useState<Record<string, NodeNarrative>>({});
 
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
 
-  const canvasRef = useRef<HTMLDivElement | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   const dragCanvasRef = useRef<{ active: boolean; startX: number; startY: number }>({
     active: false,
@@ -253,15 +282,13 @@ export function NetworkSimulationSection() {
   });
   const dragNodeRef = useRef<{ nodeId: string; pointerId: number } | null>(null);
 
-  const selectedNode = useMemo(
-    () => nodeById(nodes, selectedNodeId) ?? nodes[0],
-    [nodes, selectedNodeId],
+  const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const selectedNode = nodeMap.get(selectedNodeId) ?? nodes[0];
+  const dialogNode = useMemo(
+    () => (activeDialogNodeId ? nodeMap.get(activeDialogNodeId) : undefined),
+    [activeDialogNodeId, nodeMap],
   );
-
-  const outgoingEdges = useMemo(
-    () => edges.filter((edge) => edge.source === selectedNode?.id || edge.target === selectedNode?.id),
-    [edges, selectedNode?.id],
-  );
+  const dialogNarrative = dialogNode ? nodeNarratives[dialogNode.id] : undefined;
 
   useEffect(() => {
     return () => {
@@ -269,23 +296,8 @@ export function NetworkSimulationSection() {
     };
   }, []);
 
-  function appendSessionEvent(event: SessionEvent) {
-    setEvents((prev) => [event, ...prev].slice(0, 220));
-  }
-
   function applyStreamEvent(event: NetworkSimulatorStreamEvent) {
     if (event.session_id) setSessionId(event.session_id);
-    if (event.type === "status") {
-      const message = typeof event.message === "string" ? event.message : "status";
-      appendSessionEvent({
-        id: `status_${Math.random().toString(36).slice(2, 8)}`,
-        day: currentDay,
-        source: "System",
-        kind: "message",
-        summary: message,
-      });
-      return;
-    }
 
     if (event.type === "progress") {
       setCurrentDay(event.tick ?? 0);
@@ -298,7 +310,6 @@ export function NetworkSimulationSection() {
         edges?: Array<Record<string, unknown>>;
         kpis?: { revenue_delta?: number; cost_delta?: number; risk_delta?: number };
       } | undefined;
-
       if (state?.nodes) {
         setNodes(
           state.nodes.map((node) => {
@@ -315,7 +326,7 @@ export function NetworkSimulationSection() {
               vy: 0,
               influence: Number(node.influence ?? 0.5),
               status: asNodeStatus(String(node.status ?? "stable")),
-              lastAction: "awaiting action",
+              lastAction: nodeNarratives[id]?.summary_short ?? "awaiting action",
             };
           }),
         );
@@ -332,47 +343,32 @@ export function NetworkSimulationSection() {
           })),
         );
       }
-      if (state?.kpis) {
-        setKpis({
-          revenue_delta: Number(state.kpis.revenue_delta ?? 0),
-          cost_delta: Number(state.kpis.cost_delta ?? 0),
-          risk_delta: Number(state.kpis.risk_delta ?? 0),
-        });
-      }
       return;
     }
 
     if (event.type === "node_action") {
-      const action = event.action as { source_node_id?: string; action_type?: string; rationale?: string } | undefined;
+      const action = event.action as { source_node_id?: string; action_type?: string } | undefined;
       const sourceId = String(action?.source_node_id ?? "unknown");
       const actionLabel = String(action?.action_type ?? "action");
-      const rationale = String(action?.rationale ?? "");
-      appendSessionEvent({
-        id: `evt_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
-        day: event.tick ?? 0,
-        source: sourceId,
-        kind: "action",
-        summary: `${actionLabel}${rationale ? `: ${rationale}` : ""}`,
-      });
-      setNodes((prev) =>
-        prev.map((node) =>
-          node.id === sourceId
-            ? { ...node, lastAction: actionLabel, status: "active" }
-            : node,
-        ),
-      );
+      setNodes((prev) => prev.map((node) => (node.id === sourceId ? { ...node, lastAction: actionLabel, status: "active" } : node)));
       return;
     }
 
     if (event.type === "node_message") {
-      const message = event.message as { node_id?: string; text?: string } | undefined;
-      appendSessionEvent({
-        id: `msg_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
-        day: event.tick ?? 0,
-        source: String(message?.node_id ?? "node"),
-        kind: "message",
-        summary: String(message?.text ?? "node message"),
-      });
+      const message = event.message as { node_id?: string; text?: string; narrative?: unknown } | undefined;
+      const nodeId = String(message?.node_id ?? "");
+      const narrative = normalizeNarrative(message?.narrative);
+      if (nodeId && narrative) {
+        setNodeNarratives((prev) => ({ ...prev, [nodeId]: narrative }));
+        setActiveDialogNodeId(nodeId);
+        setNodes((prev) =>
+          prev.map((node) =>
+            node.id === nodeId
+              ? { ...node, status: "active", lastAction: narrative.summary_short }
+              : node,
+          ),
+        );
+      }
       return;
     }
 
@@ -389,28 +385,9 @@ export function NetworkSimulationSection() {
       return;
     }
 
-    if (event.type === "shock_event") {
-      const shock = event.shock as { summary?: string } | undefined;
-      appendSessionEvent({
-        id: `shock_${event.tick ?? 0}_${Math.random().toString(36).slice(2, 8)}`,
-        day: event.tick ?? 0,
-        source: "User",
-        kind: "shock",
-        summary: String(shock?.summary ?? "Shock injected"),
-      });
-      return;
-    }
-
     if (event.type === "observer_summary") {
       setObserverReport(event.summary ?? "Observer summary unavailable.");
       setObserverReady(true);
-      appendSessionEvent({
-        id: `obs_${Math.random().toString(36).slice(2, 8)}`,
-        day: currentDay,
-        source: "Observer",
-        kind: "observer",
-        summary: event.summary ?? "Observer summary",
-      });
       return;
     }
 
@@ -433,11 +410,12 @@ export function NetworkSimulationSection() {
     setCurrentDay(0);
     setNodes(buildInitialNodes());
     setEdges(buildInitialEdges());
-    setEvents([]);
+    setSelectedNodeId("n_business_hq");
+    setActiveDialogNodeId(null);
     setObserverReady(false);
     setObserverReport("");
-    setKpis({ revenue_delta: 0, cost_delta: 0, risk_delta: 0 });
     setChatMessages([]);
+    setNodeNarratives({});
   }
 
   function startSimulation() {
@@ -462,8 +440,7 @@ export function NetworkSimulationSection() {
       },
     )
       .catch((error: unknown) => {
-        const message =
-          error instanceof Error ? error.message : "Failed to start network simulation stream.";
+        const message = error instanceof Error ? error.message : "Failed to start network simulation stream.";
         setStreamError(message);
         setIsRunning(false);
       })
@@ -507,6 +484,22 @@ export function NetworkSimulationSection() {
     }
   }
 
+  async function downloadStoryline() {
+    if (!sessionId) return;
+    try {
+      const blob = await downloadNetworkStoryline(sessionId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${sessionId}_storyline.md`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to download storyline.";
+      setStreamError(message);
+    }
+  }
+
   function handleWheel(event: WheelEvent<HTMLDivElement>) {
     event.preventDefault();
     const direction = event.deltaY > 0 ? -0.08 : 0.08;
@@ -538,6 +531,7 @@ export function NetworkSimulationSection() {
     event.stopPropagation();
     dragNodeRef.current = { nodeId, pointerId: event.pointerId };
     setSelectedNodeId(nodeId);
+    if (nodeNarratives[nodeId]) setActiveDialogNodeId(nodeId);
   }
 
   function handleSvgPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
@@ -548,19 +542,22 @@ export function NetworkSimulationSection() {
     const rawY = (event.clientY - svgRect.top - offset.y) / zoom;
     setNodes((prev) =>
       prev.map((node) =>
-        node.id === drag.nodeId
-          ? { ...node, x: clamp(rawX, 40, 800), y: clamp(rawY, 30, 520), vx: 0, vy: 0 }
-          : node,
+        node.id === drag.nodeId ? { ...node, x: clamp(rawX, 40, 800), y: clamp(rawY, 30, 520), vx: 0, vy: 0 } : node,
       ),
     );
   }
 
   function handleSvgPointerUp(event: ReactPointerEvent<SVGSVGElement>) {
     const drag = dragNodeRef.current;
-    if (drag && drag.pointerId === event.pointerId) {
-      dragNodeRef.current = null;
-    }
+    if (drag && drag.pointerId === event.pointerId) dragNodeRef.current = null;
   }
+
+  const popupPosition = dialogNode
+    ? {
+        left: clamp(dialogNode.x * zoom + offset.x + 18, 12, 520),
+        top: clamp(dialogNode.y * zoom + offset.y - 170, 10, 320),
+      }
+    : null;
 
   return (
     <section className="grid gap-4 px-4 py-5 lg:grid-cols-[300px_1fr_360px]">
@@ -618,37 +615,14 @@ export function NetworkSimulationSection() {
             <span className="text-muted-foreground">Edges</span>
             <span className="font-semibold text-foreground">{edges.length}</span>
           </div>
-          <div className="mt-1 flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Events</span>
-            <span className="font-semibold text-foreground">{events.length}</span>
-          </div>
         </div>
 
         {streamError && (
           <div className="rounded-xl border border-warning/40 bg-warning/10 p-2 text-xs text-foreground">
-            <p className="font-semibold">Stream Error</p>
+            <p className="font-semibold">Simulation Error</p>
             <p className="mt-1 text-muted-foreground">{streamError}</p>
           </div>
         )}
-
-        <div className="rounded-2xl border border-border bg-background/70 p-3">
-          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">Recent Events</p>
-          <ScrollArea className="h-44">
-            <div className="space-y-2">
-              {events.slice(0, 20).map((event) => (
-                <div key={event.id} className="rounded-xl border border-border/70 bg-card/70 p-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-foreground">D{event.day}</span>
-                    <Badge variant="outline" className="text-[10px] uppercase">{event.kind}</Badge>
-                  </div>
-                  <p className="mt-1 text-muted-foreground">{event.source}</p>
-                  <p className="text-foreground">{event.summary}</p>
-                </div>
-              ))}
-              {events.length === 0 && <p className="text-xs text-muted-foreground">No events yet. Run simulation to stream timeline.</p>}
-            </div>
-          </ScrollArea>
-        </div>
       </aside>
 
       <div className="rounded-3xl border border-border bg-card/80 p-3 shadow-card">
@@ -669,7 +643,6 @@ export function NetworkSimulationSection() {
           </div>
         </div>
         <div
-          ref={canvasRef}
           className="relative h-[560px] overflow-hidden rounded-2xl border border-border/80 bg-[radial-gradient(circle_at_12%_18%,rgba(233,119,46,0.12),transparent_34%),radial-gradient(circle_at_84%_76%,rgba(60,131,123,0.15),transparent_38%),linear-gradient(180deg,rgba(250,246,239,0.95),rgba(241,235,224,0.94))]"
           onWheel={handleWheel}
           onPointerDown={handleCanvasPointerDown}
@@ -680,11 +653,10 @@ export function NetworkSimulationSection() {
           <svg className="h-full w-full touch-none" onPointerMove={handleSvgPointerMove} onPointerUp={handleSvgPointerUp}>
             <g transform={`translate(${offset.x}, ${offset.y}) scale(${zoom})`}>
               {edges.map((edge) => {
-                const source = nodeById(nodes, edge.source);
-                const target = nodeById(nodes, edge.target);
+                const source = nodeMap.get(edge.source);
+                const target = nodeMap.get(edge.target);
                 if (!source || !target) return null;
-                const isSelected =
-                  selectedNode?.id === source.id || selectedNode?.id === target.id;
+                const isSelected = selectedNode?.id === source.id || selectedNode?.id === target.id;
                 return (
                   <line
                     key={edge.id}
@@ -765,43 +737,74 @@ export function NetworkSimulationSection() {
               })}
             </g>
           </svg>
+
+          {popupPosition && dialogNode && (
+            <div
+              className="absolute w-[310px] rounded-2xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur-sm"
+              style={{ left: popupPosition.left, top: popupPosition.top }}
+              onWheelCapture={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Agent Speaking</p>
+                  <p className="text-sm font-semibold text-foreground">{dialogNode.label}</p>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Badge variant="outline" className="text-[10px]">{formatNodeType(dialogNode.type)}</Badge>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => setActiveDialogNodeId(null)}
+                    aria-label="Close node dialog"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+              {!dialogNarrative && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  This node has not responded yet. Run simulation or wait for this agent turn.
+                </p>
+              )}
+              {dialogNarrative && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-sm text-foreground">{dialogNarrative.headline}</p>
+                  <p className="text-xs text-muted-foreground">{dialogNarrative.summary_short}</p>
+                  <div className="grid grid-cols-3 gap-1 text-[10px]">
+                    <Badge variant="outline">Sales {formatDirection(dialogNarrative.sales.direction)}</Badge>
+                    <Badge variant="outline">Cost {formatDirection(dialogNarrative.cost.direction)}</Badge>
+                    <Badge variant="outline">Risk {formatDirection(dialogNarrative.risk.direction)}</Badge>
+                  </div>
+                  <ScrollArea
+                    className="h-28 rounded-xl border border-border/70 bg-background/60 p-2"
+                    onWheelCapture={(event) => {
+                      event.stopPropagation();
+                    }}
+                  >
+                    <div className="break-words text-xs leading-relaxed text-foreground [&_a]:text-primary [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_li]:ml-4 [&_li]:list-disc [&_p]:whitespace-pre-wrap [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/40 [&_pre]:p-2">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{dialogNarrative.full_response_md}</ReactMarkdown>
+                    </div>
+                  </ScrollArea>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
       <aside className="space-y-4 rounded-3xl border border-border bg-card/75 p-4 shadow-card">
         <div className="rounded-2xl border border-border bg-background/80 p-3">
-          <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Node Inspector</p>
-          {selectedNode && (
-            <div className="mt-2 space-y-2 text-sm">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg text-foreground">{selectedNode.label}</h3>
-                <Badge variant="outline">{formatNodeType(selectedNode.type)}</Badge>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge className="bg-muted text-foreground hover:bg-muted">{selectedNode.status}</Badge>
-                <span className="text-xs text-muted-foreground">Influence {(selectedNode.influence * 100).toFixed(0)}%</span>
-              </div>
-              <p className="rounded-xl border border-border/80 bg-card/70 p-2 text-xs text-foreground">{selectedNode.lastAction}</p>
-              <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Connected edges</p>
-              <ScrollArea className="h-28 rounded-xl border border-border/70 bg-card/60 p-2">
-                <div className="space-y-2">
-                  {outgoingEdges.map((edge) => (
-                    <div key={edge.id} className="rounded-lg border border-border/70 bg-background/80 p-2 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-foreground">{edge.type}</span>
-                        <span className="text-muted-foreground">w={edge.weight.toFixed(2)}</span>
-                      </div>
-                      <p className="text-muted-foreground">{edge.source} {"->"} {edge.target}</p>
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-border bg-background/80 p-3">
-          <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Final Observer Summary</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Final Observer Summary</p>
+            <Button variant="outline" size="sm" onClick={downloadStoryline} disabled={!observerReady || !sessionId}>
+              <Download className="mr-1 h-3.5 w-3.5" />
+              Download Storyline
+            </Button>
+          </div>
           <div className="mt-2 rounded-xl border border-border/70 bg-card/70 p-3 text-sm text-foreground">
             {!observerReady && (
               <p className="flex items-center gap-2 text-muted-foreground">
@@ -809,21 +812,11 @@ export function NetworkSimulationSection() {
                 Report will appear after simulation completes.
               </p>
             )}
-            {observerReady && <p>{observerReport}</p>}
-          </div>
-          <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-            <div className="rounded-lg border border-border/70 bg-card/60 p-2">
-              <p className="text-muted-foreground">Revenue</p>
-              <p className="font-semibold text-foreground">{(kpis.revenue_delta * 100).toFixed(2)}%</p>
-            </div>
-            <div className="rounded-lg border border-border/70 bg-card/60 p-2">
-              <p className="text-muted-foreground">Cost</p>
-              <p className="font-semibold text-foreground">{(kpis.cost_delta * 100).toFixed(2)}%</p>
-            </div>
-            <div className="rounded-lg border border-border/70 bg-card/60 p-2">
-              <p className="text-muted-foreground">Risk</p>
-              <p className="font-semibold text-foreground">{(kpis.risk_delta * 100).toFixed(2)}%</p>
-            </div>
+            {observerReady && (
+              <div className="break-words text-sm leading-relaxed text-foreground [&_a]:text-primary [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_li]:ml-5 [&_li]:list-disc [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:whitespace-pre-wrap [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/40 [&_pre]:p-2">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{observerReport}</ReactMarkdown>
+              </div>
+            )}
           </div>
         </div>
 
@@ -834,11 +827,11 @@ export function NetworkSimulationSection() {
               {observerReady ? "Ready" : "Locked"}
             </Badge>
           </div>
-          <ScrollArea className="mt-2 h-36 rounded-xl border border-border/70 bg-card/70 p-2">
+          <ScrollArea className="mt-2 h-80 rounded-xl border border-border/70 bg-card/70 p-2">
             <div className="space-y-2">
               {chatMessages.length === 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Chat unlocks after simulation. Questions will be grounded to this session timeline.
+                  Ask observer questions after simulation completes.
                 </p>
               )}
               {chatMessages.map((message, idx) => (
@@ -870,37 +863,6 @@ export function NetworkSimulationSection() {
               <Send className="h-4 w-4" />
             </Button>
           </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2 text-xs">
-          <div className="rounded-lg border border-border bg-card/70 p-2 text-center">
-            <ChartLine className="mx-auto h-4 w-4 text-primary" />
-            <p className="mt-1 text-muted-foreground">Metric Deltas</p>
-          </div>
-          <div className="rounded-lg border border-border bg-card/70 p-2 text-center">
-            <MessageSquareText className="mx-auto h-4 w-4 text-primary" />
-            <p className="mt-1 text-muted-foreground">Node Dialog</p>
-          </div>
-          <div className="rounded-lg border border-border bg-card/70 p-2 text-center">
-            <Bot className="mx-auto h-4 w-4 text-primary" />
-            <p className="mt-1 text-muted-foreground">Observer Agent</p>
-          </div>
-        </div>
-        <div className="rounded-xl border border-warning/40 bg-warning/10 p-2 text-xs text-foreground">
-          <p className="inline-flex items-center gap-1 font-semibold">
-            <AlertTriangle className="h-3 w-3" />
-            Backend stream mode
-          </p>
-          <p className="mt-1 text-muted-foreground">
-            Graph updates now come from `/api/network-simulator/stream` and session shock/chat endpoints.
-          </p>
-        </div>
-        <div className="rounded-xl border border-success/40 bg-success/10 p-2 text-xs text-foreground">
-          <p className="inline-flex items-center gap-1 font-semibold">
-            <ShieldCheck className="h-3 w-3" />
-            2D board untouched
-          </p>
-          <p className="mt-1 text-muted-foreground">Current deep 2D arena remains available in its original tab.</p>
         </div>
       </aside>
     </section>

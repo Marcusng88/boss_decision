@@ -250,3 +250,13 @@ export async function chatNetworkObserver(
   const payload = (await response.json()) as { answer?: string };
   return { answer: payload.answer ?? "No observer answer returned." };
 }
+
+export async function downloadNetworkStoryline(sessionId: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/api/network-simulator/${sessionId}/storyline`, {
+    method: "GET",
+  });
+  if (!response.ok) {
+    throw new Error(`Storyline download failed (${response.status})`);
+  }
+  return response.blob();
+}
