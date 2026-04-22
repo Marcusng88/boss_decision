@@ -4,6 +4,11 @@ Loads environment variables and provides settings.
 """
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from dotenv import load_dotenv
+from typing import Optional
+import os
+
+load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -23,8 +28,9 @@ class Settings(BaseSettings):
     database_url: str | None = None
     
     # LLM Configuration
+    google_api_key: Optional[str] = None
     openai_api_key: str | None = None
-    llm_model: str = "gpt-4"
+    llm_model: str = "gemini-2.5-flash-lite"
     llm_temperature: float = 0.7
     
     # LangChain Configuration
