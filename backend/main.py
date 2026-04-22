@@ -2,10 +2,15 @@
 Main FastAPI application for AI Boss Decision Engine.
 Multi-agent decision support system with LangChain integration.
 """
+import asyncio
+import json
+import sys
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Optional
 import uvicorn
 
 from config import get_settings
@@ -47,11 +52,51 @@ class AnalyzeRequest(BaseModel):
     submitted_by: Optional[str] = None
 
 
-class EmployeeResponse(BaseModel):
-    """Response model for employee endpoint."""
-    employee: dict
-    hr_records: list[dict]
-    sales_records: list[dict]
+class SimulatorRequest(BaseModel):
+    """Request model for simulator graph execution."""
+
+    query: str
+    structured_data: Optional[dict[str, Any]] = None
+    documents: Optional[list[str]] = None
+    business_context: Optional[dict[str, Any]] = None
+
+
+def _ensure_simulator_import_path() -> None:
+    simulator_root = Path(__file__).resolve().parent / "simulator_agent_umh26"
+    simulator_root_str = str(simulator_root)
+    if simulator_root_str not in sys.path:
+        sys.path.insert(0, simulator_root_str)
+
+
+def _get_simulator_agent():
+    _ensure_simulator_import_path()
+    from simulator_agent_umh26.src import agent as simulator_agent
+
+    return simulator_agent
+
+
+def _build_simulator_initial_state(request: SimulatorRequest) -> dict[str, Any]:
+    return {
+        "query": request.query,
+        "structured_data": request.structured_data or {},
+        "documents": request.documents or [],
+        "business_context": request.business_context or {},
+        "persona_results": [],
+        "persona_stream_events": [],
+        "scenario_branches": [],
+    }
+
+
+def _ndjson_line(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, default=str) + "\n"
+
+
+def _safe_json_payload(data: Any) -> Any:
+    try:
+        json.dumps(data, default=str)
+        return data
+    except Exception:
+        return str(data)
 
 
 # ============================================
@@ -74,7 +119,7 @@ async def health_check():
     try:
         # Test database connection
         supabase = db.client
-        response = supabase.table('department').select('count').execute()
+        supabase.table('department').select('count').execute()
         
         return {
             "status": "healthy",
@@ -152,6 +197,78 @@ async def analyze_query(request: AnalyzeRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+@app.post("/api/simulator/run")
+async def run_simulator(request: SimulatorRequest):
+    """
+    Execute simulator graph and return final result in one response.
+    """
+    try:
+        simulator_agent = _get_simulator_agent()
+        initial_state = _build_simulator_initial_state(request)
+        result = await asyncio.to_thread(simulator_agent.invoke, initial_state)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Simulator run failed: {str(e)}")
+
+
+@app.post("/api/simulator/stream")
+async def stream_simulator(request: SimulatorRequest):
+    """
+    Stream simulator updates and tokens as NDJSON.
+    """
+    simulator_agent = _get_simulator_agent()
+    initial_state = _build_simulator_initial_state(request)
+
+    async def event_stream():
+        latest_values: dict[str, Any] | None = None
+        try:
+            yield _ndjson_line({"type": "status", "message": "Simulator stream started."})
+            async for part in simulator_agent.astream(
+                initial_state,
+                stream_mode=["updates", "values", "custom"],
+                version="v2",
+            ):
+                part_type = part.get("type")
+                if part_type == "updates":
+                    updates = part.get("data", {})
+                    nodes = list(updates.keys()) if isinstance(updates, dict) else []
+                    if nodes:
+                        yield _ndjson_line(
+                            {
+                                "type": "update",
+                                "nodes": nodes,
+                                "updates": _safe_json_payload(updates),
+                            }
+                        )
+                elif part_type == "values":
+                    values = part.get("data")
+                    if isinstance(values, dict):
+                        latest_values = values
+                elif part_type == "custom":
+                    custom_data = part.get("data")
+                    if isinstance(custom_data, dict):
+                        yield _ndjson_line(
+                            {
+                                "type": "custom",
+                                "event": custom_data.get("event"),
+                                "data": _safe_json_payload(custom_data),
+                            }
+                        )
+
+            if latest_values is not None:
+                yield _ndjson_line(
+                    {"type": "final", "response": latest_values.get("response"), "state": latest_values}
+                )
+            else:
+                yield _ndjson_line({"type": "final", "response": "Simulation completed."})
+        except Exception as e:
+            yield _ndjson_line({"type": "error", "error": str(e)})
+        finally:
+            yield _ndjson_line({"type": "done"})
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 # ============================================

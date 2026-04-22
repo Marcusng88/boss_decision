@@ -1,4 +1,4 @@
-import { CheckCircle2, AlertTriangle, Gauge } from "lucide-react";
+﻿import { CheckCircle2, AlertTriangle, Gauge } from "lucide-react";
 import { Decision } from "@/lib/decision-engine";
 
 interface Props {
@@ -13,46 +13,40 @@ export const FinalDecision = ({ decision }: Props) => {
   }[decision.risk];
 
   return (
-    <section className="relative rounded-2xl bg-gradient-decision text-primary-foreground p-8 shadow-elevated animate-scale-in overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_hsl(var(--primary-glow)/0.4),_transparent_60%)]" />
+    <section className="relative overflow-hidden rounded-[1.8rem] bg-gradient-decision p-8 text-primary-foreground shadow-elevated animate-scale-in">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_hsl(var(--primary-glow)/0.25),_transparent_60%)]" />
 
       <div className="relative">
-        <div className="flex items-center gap-2 mb-3">
-          <CheckCircle2 className="w-5 h-5" />
-          <span className="text-xs font-bold uppercase tracking-widest opacity-90">
-            Final Decision
-          </span>
+        <div className="mb-3 flex items-center gap-2">
+          <CheckCircle2 className="h-5 w-5" />
+          <span className="text-xs font-bold uppercase tracking-[0.18em] opacity-90">Final Decision</span>
         </div>
 
-        <h2 className="text-4xl md:text-5xl font-bold mb-4 leading-tight">
-          {decision.verdict}
-        </h2>
+        <h2 className="mb-4 text-5xl leading-[0.95] md:text-6xl">{decision.verdict}</h2>
 
-        <p className="text-base md:text-lg opacity-95 mb-6 max-w-2xl leading-relaxed">
-          {decision.reasoning}
-        </p>
+        <p className="mb-6 max-w-2xl text-base leading-relaxed opacity-95 md:text-lg">{decision.reasoning}</p>
 
-        <div className="grid sm:grid-cols-2 gap-3">
-          <div className={`rounded-xl border bg-background/95 p-4 ${riskColor.replace("text-", "").split(" ")[0]}`}>
-            <div className="flex items-center gap-2 text-foreground/70 text-xs font-semibold uppercase tracking-wide mb-2">
-              <AlertTriangle className="w-3.5 h-3.5" />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-primary-foreground/25 bg-background/95 p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground/70">
+              <AlertTriangle className="h-3.5 w-3.5" />
               Risk Level
             </div>
-            <div className={`inline-flex items-center px-3 py-1 rounded-full border text-sm font-bold ${riskColor}`}>
+            <div className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-bold ${riskColor}`}>
               {decision.risk}
             </div>
           </div>
 
-          <div className="rounded-xl bg-background/95 p-4">
-            <div className="flex items-center gap-2 text-foreground/70 text-xs font-semibold uppercase tracking-wide mb-2">
-              <Gauge className="w-3.5 h-3.5" />
+          <div className="rounded-xl border border-primary-foreground/25 bg-background/95 p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-foreground/70">
+              <Gauge className="h-3.5 w-3.5" />
               Confidence
             </div>
             <div className="flex items-center gap-3">
               <span className="text-2xl font-bold text-foreground">{decision.confidence}%</span>
-              <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary">
                 <div
-                  className="h-full bg-gradient-primary rounded-full transition-all duration-1000"
+                  className="h-full rounded-full bg-gradient-primary transition-all duration-1000"
                   style={{ width: `${decision.confidence}%` }}
                 />
               </div>
