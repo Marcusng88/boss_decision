@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Brain } from "lucide-react";
+import { Brain, FileText } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import { InputPanel } from "@/components/decision/InputPanel";
 import { DataRetrieved } from "@/components/decision/DataRetrieved";
 import { AgentInsights } from "@/components/decision/AgentInsights";
@@ -12,6 +14,7 @@ type Stage = "idle" | "data" | "agents" | "subagents" | "decision";
 const stageOrder: Stage[] = ["data", "agents", "subagents", "decision"];
 
 const Index = () => {
+  const navigate = useNavigate();
   const [stage, setStage] = useState<Stage>("idle");
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [activeQuery, setActiveQuery] = useState<string>("");
@@ -56,9 +59,20 @@ const Index = () => {
               </p>
             </div>
           </div>
-          <div className="hidden md:flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-            Engine online
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/documents")}
+              className="bg-gradient-to-r from-orange-400 to-orange-600 text-white border-0 hover:from-orange-500 hover:to-orange-700 shadow-md"
+            >
+              <FileText className="w-4 h-4 mr-2" />
+              Documents
+            </Button>
+            <div className="hidden md:flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+              Engine online
+            </div>
           </div>
         </div>
       </header>

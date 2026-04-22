@@ -63,7 +63,8 @@ CREATE TABLE hr_record (
     reviewer_id BIGINT REFERENCES employee(employee_id) ON DELETE SET NULL,
     ai_justification TEXT,
     source_id BIGINT REFERENCES source_document(source_id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(employee_id, period)  -- Prevent duplicate records for same employee + period
 );
 
 -- Sales records (revenue contribution, deals, pipeline)
@@ -127,7 +128,8 @@ CREATE TABLE supply_record (
     shortage_flag INTEGER DEFAULT 0,
     ai_justification TEXT,
     source_id BIGINT REFERENCES source_document(source_id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(item_name, period)  -- Prevent duplicate records for same item + period
 );
 
 -- Legal records (policies, compliance rules, constraints)
