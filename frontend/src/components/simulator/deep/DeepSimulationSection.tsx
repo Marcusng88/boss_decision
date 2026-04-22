@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   BadgeDollarSign,
   Banknote,
-  Bot,
   Building2,
   CheckCircle2,
   Factory,
@@ -13,6 +12,9 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Info,
+  FileText,
+  X,
   ShieldCheck,
   ShoppingCart,
   Sparkles,
@@ -38,6 +40,8 @@ interface AgentCard {
   id: string;
   name: string;
   role: string;
+  objective: string;
+  allowedPaths: string[];
   color: string;
   x: number;
   y: number;
@@ -54,12 +58,6 @@ interface TimelineEvent {
   message: string;
 }
 
-interface TickRecap {
-  tick: number;
-  title: string;
-  summary: string;
-}
-
 interface ScorePoint {
   tick: number;
   [key: string]: number;
@@ -70,6 +68,15 @@ interface FinalReport {
   recommendation: string;
   confidence: number;
   key_turning_points: string[];
+  persona_observations?: Array<{
+    persona_id: string;
+    name: string;
+    role: string;
+    objective: string;
+    stance: string;
+    evidence: string[];
+    suggested_next_action: string;
+  }>;
   html_slides: string;
 }
 
@@ -99,6 +106,14 @@ interface WorldAgent {
   confidence?: unknown;
 }
 
+interface WorldPersona {
+  id?: unknown;
+  name?: unknown;
+  role?: unknown;
+  objective?: unknown;
+  allowed_paths?: unknown;
+}
+
 const DEFAULT_QUERY = "Should we increase price by 10% for student segment next quarter?";
 const DEFAULT_MAX_TICKS = 5;
 const RUN_TICK_MIN = 1;
@@ -106,7 +121,7 @@ const RUN_TICK_MAX = 240;
 const SHARED_START_X = 50;
 const SHARED_START_Y = 50;
 
-const AGENT_COLORS: Record<string, string> = {
+const AGENT_COLOR_OVERRIDES: Record<string, string> = {
   consumer_psychologist_001: "hsl(18 88% 51%)",
   pricing_strategist_001: "hsl(171 66% 36%)",
   market_risk_001: "hsl(38 86% 44%)",
@@ -114,12 +129,55 @@ const AGENT_COLORS: Record<string, string> = {
   brand_positioning_001: "hsl(204 32% 26%)",
 };
 
+const PERSONA_COLOR_PALETTE = [
+  "hsl(18 88% 51%)",
+  "hsl(171 66% 36%)",
+  "hsl(38 86% 44%)",
+  "hsl(148 62% 34%)",
+  "hsl(204 32% 26%)",
+  "hsl(12 73% 52%)",
+  "hsl(26 79% 46%)",
+  "hsl(196 48% 38%)",
+  "hsl(163 54% 34%)",
+  "hsl(29 69% 40%)",
+  "hsl(205 21% 34%)",
+  "hsl(8 63% 44%)",
+];
+
+const PERSONA_SPRITES = Array.from(
+  { length: 49 },
+  (_, idx) => `/assets/personas/persona_${String(idx + 1).padStart(2, "0")}.png`,
+);
+
+const personaVisualCache = new Map<string, { color: string; avatarUrl: string }>();
+
+function hashString(input: string): number {
+  let hash = 0;
+  for (let idx = 0; idx < input.length; idx += 1) {
+    hash = (hash * 31 + input.charCodeAt(idx)) >>> 0;
+  }
+  return hash;
+}
+
+function getPersonaVisual(personaId: string): { color: string; avatarUrl: string } {
+  const cached = personaVisualCache.get(personaId);
+  if (cached) return cached;
+  const hash = hashString(personaId || "persona");
+  const color = AGENT_COLOR_OVERRIDES[personaId] ?? PERSONA_COLOR_PALETTE[hash % PERSONA_COLOR_PALETTE.length];
+  const avatarUrl = PERSONA_SPRITES[hash % PERSONA_SPRITES.length];
+  const visual = { color, avatarUrl };
+  personaVisualCache.set(personaId, visual);
+  return visual;
+}
+
 const BASE_AGENTS: AgentCard[] = [
   {
     id: "consumer_psychologist_001",
     name: "Consumer Psychologist",
     role: "Demand behavior lead",
-    color: AGENT_COLORS.consumer_psychologist_001,
+    objective: "Understand student demand reaction and churn behavior.",
+    allowedPaths: [],
+    color: AGENT_COLOR_OVERRIDES.consumer_psychologist_001,
     x: SHARED_START_X,
     y: SHARED_START_Y,
     status: "idle",
@@ -132,7 +190,9 @@ const BASE_AGENTS: AgentCard[] = [
     id: "pricing_strategist_001",
     name: "Pricing Strategist",
     role: "Price and promo architect",
-    color: AGENT_COLORS.pricing_strategist_001,
+    objective: "Model price elasticity and promotion tradeoffs.",
+    allowedPaths: [],
+    color: AGENT_COLOR_OVERRIDES.pricing_strategist_001,
     x: SHARED_START_X,
     y: SHARED_START_Y,
     status: "idle",
@@ -145,7 +205,9 @@ const BASE_AGENTS: AgentCard[] = [
     id: "market_risk_001",
     name: "Market Risk",
     role: "Competitor response radar",
-    color: AGENT_COLORS.market_risk_001,
+    objective: "Estimate competitor retaliation and market downside.",
+    allowedPaths: [],
+    color: AGENT_COLOR_OVERRIDES.market_risk_001,
     x: SHARED_START_X,
     y: SHARED_START_Y,
     status: "idle",
@@ -158,7 +220,9 @@ const BASE_AGENTS: AgentCard[] = [
     id: "ops_constraints_001",
     name: "Ops Constraints",
     role: "Execution feasibility owner",
-    color: AGENT_COLORS.ops_constraints_001,
+    objective: "Validate operational feasibility and rollout limits.",
+    allowedPaths: [],
+    color: AGENT_COLOR_OVERRIDES.ops_constraints_001,
     x: SHARED_START_X,
     y: SHARED_START_Y,
     status: "idle",
@@ -171,7 +235,9 @@ const BASE_AGENTS: AgentCard[] = [
     id: "brand_positioning_001",
     name: "Brand Positioning",
     role: "Narrative and trust steward",
-    color: AGENT_COLORS.brand_positioning_001,
+    objective: "Protect brand trust and long-term positioning.",
+    allowedPaths: [],
+    color: AGENT_COLOR_OVERRIDES.brand_positioning_001,
     x: SHARED_START_X,
     y: SHARED_START_Y,
     status: "idle",
@@ -263,7 +329,9 @@ function mapWorldAgents(input: unknown, previous: AgentCard[]): AgentCard[] {
         id,
         name: typeof agent.name === "string" ? agent.name : prev?.name ?? id,
         role: typeof agent.role === "string" ? agent.role : prev?.role ?? "persona",
-        color: AGENT_COLORS[id] ?? prev?.color ?? "hsl(212 22% 32%)",
+        objective: prev?.objective ?? "",
+        allowedPaths: prev?.allowedPaths ?? [],
+        color: prev?.color ?? getPersonaVisual(id).color,
         x: asNumber(agent.x, prev?.x ?? 50),
         y: asNumber(agent.y, prev?.y ?? 50),
         status: normalizedStatus,
@@ -276,6 +344,33 @@ function mapWorldAgents(input: unknown, previous: AgentCard[]): AgentCard[] {
       };
     })
     .filter((item): item is AgentCard => item !== null);
+}
+
+function applyPersonaProfiles(input: unknown, previous: AgentCard[]): AgentCard[] {
+  if (!Array.isArray(input)) return previous;
+  const byId = new Map<string, WorldPersona>();
+  for (const row of input) {
+    if (!row || typeof row !== "object") continue;
+    const persona = row as WorldPersona;
+    const id = typeof persona.id === "string" ? persona.id : "";
+    if (!id) continue;
+    byId.set(id, persona);
+  }
+  if (byId.size === 0) return previous;
+  return previous.map((agent) => {
+    const persona = byId.get(agent.id);
+    if (!persona) return agent;
+    const allowedPaths = Array.isArray(persona.allowed_paths)
+      ? persona.allowed_paths.filter((item): item is string => typeof item === "string")
+      : agent.allowedPaths;
+    return {
+      ...agent,
+      name: typeof persona.name === "string" ? persona.name : agent.name,
+      role: typeof persona.role === "string" ? persona.role : agent.role,
+      objective: typeof persona.objective === "string" ? persona.objective : agent.objective,
+      allowedPaths,
+    };
+  });
 }
 
 function mapBoardTiles(input: unknown, fallback: BoardTile[]): BoardTile[] {
@@ -305,34 +400,32 @@ function asScoreMap(input: unknown): Record<string, number> {
   return out;
 }
 
-function buildTickRecap(
-  tick: number,
-  timeline: TimelineEvent[],
-  currentKpi: { revenue: number; margin: number; sentiment: number; churn_risk: number },
-  previousKpi: { revenue: number; margin: number; sentiment: number; churn_risk: number },
-): TickRecap {
-  const dayRows = timeline.filter((item) => item.tick === tick).slice(0, 4);
-  const revenueDelta = currentKpi.revenue - previousKpi.revenue;
-  const marginDelta = currentKpi.margin - previousKpi.margin;
-  const sentimentDelta = currentKpi.sentiment - previousKpi.sentiment;
-  const riskDelta = currentKpi.churn_risk - previousKpi.churn_risk;
-
-  let title = "Stable Day";
-  if (revenueDelta > 0.35 && marginDelta > 0.35) title = "Profit Surge";
-  else if (riskDelta > 0.35) title = "Risk Pressure";
-  else if (sentimentDelta > 0.35) title = "Trust Expansion";
-
-  const summary =
-    dayRows.length > 0
-      ? dayRows
-          .slice(0, 2)
-          .map((item) => item.message)
-          .join(" ")
-      : `Revenue ${formatSigned(revenueDelta)}, margin ${formatSigned(marginDelta)}, sentiment ${formatSigned(
-          sentimentDelta,
-        )}, risk ${formatSigned(riskDelta)}.`;
-
-  return { tick, title, summary };
+function PersonaAvatar({
+  personaId,
+  name,
+  size = 24,
+  className = "",
+}: {
+  personaId: string;
+  name: string;
+  size?: number;
+  className?: string;
+}) {
+  const visual = getPersonaVisual(personaId);
+  return (
+    <span
+      className={`inline-flex items-center justify-center overflow-hidden rounded-lg border-2 bg-white ${className}`}
+      style={{ width: size, height: size, borderColor: visual.color }}
+    >
+      <img
+        src={visual.avatarUrl}
+        alt={name}
+        className="h-full w-full object-contain"
+        style={{ imageRendering: "pixelated" }}
+        draggable={false}
+      />
+    </span>
+  );
 }
 
 export function DeepSimulationSection() {
@@ -346,15 +439,15 @@ export function DeepSimulationSection() {
   const [agents, setAgents] = useState<AgentCard[]>(BASE_AGENTS);
   const [selectedAgentId, setSelectedAgentId] = useState(BASE_AGENTS[0].id);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
-  const [tickRecaps, setTickRecaps] = useState<TickRecap[]>([]);
   const [boardTiles, setBoardTiles] = useState<BoardTile[]>(DEFAULT_TILES);
   const [kpi, setKpi] = useState({ revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 });
   const [scoreSeries, setScoreSeries] = useState<ScorePoint[]>([]);
   const [finalReport, setFinalReport] = useState<FinalReport | null>(null);
+  const [showResultCard, setShowResultCard] = useState(false);
+  const [showInfoCard, setShowInfoCard] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
-  const prevKpiRef = useRef({ revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 });
-  const lastRecapTickRef = useRef(0);
+  const lastWorldTickRef = useRef(0);
   const timelineRef = useRef<TimelineEvent[]>([]);
   const lastWorldUiTsRef = useRef(0);
 
@@ -390,13 +483,13 @@ export function DeepSimulationSection() {
     setSelectedAgentId(BASE_AGENTS[0].id);
     setTimeline([]);
     timelineRef.current = [];
-    setTickRecaps([]);
     setBoardTiles(DEFAULT_TILES);
     setKpi({ revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 });
-    prevKpiRef.current = { revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 };
-    lastRecapTickRef.current = 0;
+    lastWorldTickRef.current = 0;
     setScoreSeries([]);
     setFinalReport(null);
+    setShowResultCard(false);
+    setShowInfoCard(false);
     lastWorldUiTsRef.current = 0;
   };
 
@@ -458,11 +551,12 @@ export function DeepSimulationSection() {
 
       const scores = asScoreMap((state as Record<string, unknown>).scores);
       const now = Date.now();
-      const shouldPaintHeavy = now - lastWorldUiTsRef.current > 140 || stateTick !== lastRecapTickRef.current;
+      const shouldPaintHeavy = now - lastWorldUiTsRef.current > 140 || stateTick !== lastWorldTickRef.current;
 
       setAgents((prev) => {
         const next = mapWorldAgents(state.agents, prev);
-        const withScores = next.map((agent) => ({ ...agent, score: scores[agent.id] ?? agent.score }));
+        const withPersonaProfiles = applyPersonaProfiles((state as Record<string, unknown>).personas, next);
+        const withScores = withPersonaProfiles.map((agent) => ({ ...agent, score: scores[agent.id] ?? agent.score }));
         return withScores.length > 0 ? withScores : prev;
       });
 
@@ -479,6 +573,7 @@ export function DeepSimulationSection() {
 
       if (!shouldPaintHeavy) return;
       lastWorldUiTsRef.current = now;
+      lastWorldTickRef.current = stateTick;
 
       if (Array.isArray(state.timeline)) {
         const timelineRows = state.timeline
@@ -498,13 +593,6 @@ export function DeepSimulationSection() {
         }
       }
 
-      if (stateTick > 0 && lastRecapTickRef.current !== stateTick) {
-        const prevKpi = prevKpiRef.current;
-        const recap = buildTickRecap(stateTick, timelineRef.current, currentKpi, prevKpi);
-        prevKpiRef.current = currentKpi;
-        lastRecapTickRef.current = stateTick;
-        setTickRecaps((prev) => [recap, ...prev].slice(0, 90));
-      }
       return;
     }
 
@@ -546,12 +634,19 @@ export function DeepSimulationSection() {
         const keyTurningPoints = Array.isArray(response.key_turning_points)
           ? response.key_turning_points.filter((item): item is string => typeof item === "string")
           : [];
+        const personaObservations = Array.isArray(response.persona_observations)
+          ? response.persona_observations.filter(
+              (item): item is NonNullable<FinalReport["persona_observations"]>[number] =>
+                !!item && typeof item === "object" && typeof (item as Record<string, unknown>).persona_id === "string",
+            )
+          : [];
         const htmlSlides = typeof response.html_slides === "string" ? response.html_slides : "";
         setFinalReport({
           summary,
           recommendation,
           confidence,
           key_turning_points: keyTurningPoints,
+          persona_observations: personaObservations,
           html_slides: htmlSlides,
         });
         setProgressSummary(summary);
@@ -580,12 +675,12 @@ export function DeepSimulationSection() {
     setAgents(BASE_AGENTS.map((agent) => ({ ...agent, transcript: "", toolCalls: [], status: "idle", score: 0 })));
     setTimeline([]);
     timelineRef.current = [];
-    setTickRecaps([]);
     setKpi({ revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 });
-    prevKpiRef.current = { revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 };
-    lastRecapTickRef.current = 0;
+    lastWorldTickRef.current = 0;
     setScoreSeries([]);
     setFinalReport(null);
+    setShowResultCard(false);
+    setShowInfoCard(false);
     lastWorldUiTsRef.current = 0;
     setRunning(true);
 
@@ -674,6 +769,17 @@ export function DeepSimulationSection() {
               <Button onClick={resetSimulation} variant="outline" className="h-9 px-3">
                 <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset
               </Button>
+              <Button
+                onClick={() => setShowResultCard(true)}
+                disabled={!finalReport}
+                variant="outline"
+                className="h-9 px-3"
+              >
+                <FileText className="mr-1.5 h-3.5 w-3.5" /> Result
+              </Button>
+              <Button onClick={() => setShowInfoCard(true)} variant="outline" className="h-9 px-3">
+                <Info className="mr-1.5 h-3.5 w-3.5" /> Info
+              </Button>
             </div>
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
           </div>
@@ -697,12 +803,24 @@ export function DeepSimulationSection() {
             </div>
           </div>
 
-          <div className="mb-3 h-48 rounded-xl border border-border bg-background/80 p-2.5">
+          <div className="mb-3 h-56 rounded-xl border border-border bg-background/80 p-2.5">
             <div className="mb-1.5 flex items-center justify-between">
               <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Strategist Score Lines</p>
               <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />
             </div>
-            <ResponsiveContainer width="100%" height="88%">
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {sortedAgents.map((agent) => (
+                <span
+                  key={`legend-${agent.id}`}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-card/80 px-1.5 py-0.5 text-[10px] text-foreground"
+                >
+                  <PersonaAvatar personaId={agent.id} name={agent.name} size={16} />
+                  <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: agent.color }} />
+                  {agent.name}
+                </span>
+              ))}
+            </div>
+            <ResponsiveContainer width="100%" height="74%">
               <LineChart data={scoreSeries} margin={{ top: 4, right: 8, bottom: 6, left: -16 }}>
                 <XAxis dataKey="tick" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={30} />
@@ -730,23 +848,6 @@ export function DeepSimulationSection() {
             </ResponsiveContainer>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1 sim-scroll">
-            <p className="mb-2 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Day Cards</p>
-            <div className="space-y-2">
-              {tickRecaps.length === 0 && (
-                <p className="rounded-md border border-border bg-background/80 p-2 text-xs text-muted-foreground">
-                  Recaps appear after day 1.
-                </p>
-              )}
-              {tickRecaps.map((recap) => (
-                <div key={`tick-${recap.tick}`} className="rounded-xl border border-border bg-background/80 p-3">
-                  <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Day {recap.tick}</p>
-                  <p className="mt-1 text-sm font-semibold text-foreground">{recap.title}</p>
-                  <p className="mt-1 text-xs leading-relaxed text-foreground">{recap.summary}</p>
-                </div>
-              ))}
-            </div>
-          </div>
         </aside>
 
         <main className="flex h-full min-h-0 min-w-0 flex-col rounded-2xl border border-border bg-card/85 p-4 overflow-hidden">
@@ -812,10 +913,10 @@ export function DeepSimulationSection() {
                   title={agent.name}
                 >
                   <span
-                    className={`flex h-10 w-10 items-center justify-center rounded-full border-[3px] text-white shadow-lg ${isSelected ? "ring-2 ring-primary/70" : ""}`}
-                    style={{ backgroundColor: agent.color, borderColor: agent.color }}
+                    className={`inline-flex rounded-xl border-2 bg-card/95 p-0.5 shadow-lg ${isSelected ? "ring-2 ring-primary/70" : ""}`}
+                    style={{ borderColor: agent.color }}
                   >
-                    <Bot className="h-4 w-4" />
+                    <PersonaAvatar personaId={agent.id} name={agent.name} size={30} />
                   </span>
                 </button>
               );
@@ -830,10 +931,19 @@ export function DeepSimulationSection() {
                   <div>
                     <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Selected Strategist</p>
                     <p className="inline-flex items-center gap-2 text-base font-semibold">
+                      <PersonaAvatar personaId={selectedAgent.id} name={selectedAgent.name} size={20} />
                       <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: selectedAgent.color }} />
                       {selectedAgent.name}
                     </p>
                     <p className="text-xs text-muted-foreground">{selectedAgent.role}</p>
+                    {selectedAgent.objective ? (
+                      <p className="mt-1 text-xs leading-relaxed text-foreground">{selectedAgent.objective}</p>
+                    ) : null}
+                    {selectedAgent.allowedPaths.length > 0 ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Context scope: {selectedAgent.allowedPaths.slice(0, 2).join(", ")}
+                      </p>
+                    ) : null}
                   </div>
                   <Badge className={statusBadgeTone(selectedAgent.status)}>{humanStatus(selectedAgent.status)}</Badge>
                 </div>
@@ -866,36 +976,6 @@ export function DeepSimulationSection() {
                   </div>
                 </div>
 
-                {finalReport ? (
-                  <div className="mt-4 rounded-xl border border-primary/35 bg-primary/5 p-3">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Simulation Outcome</p>
-                      <Badge className="border border-primary/40 bg-primary/10 text-foreground">
-                        Confidence {Math.round(finalReport.confidence * 100)}%
-                      </Badge>
-                    </div>
-                    <p className="text-sm font-semibold text-foreground">{finalReport.summary}</p>
-                    {finalReport.recommendation ? (
-                      <p className="mt-2 text-sm leading-relaxed text-foreground">{finalReport.recommendation}</p>
-                    ) : null}
-                    {finalReport.key_turning_points.length > 0 ? (
-                      <ul className="mt-2 space-y-1 text-xs text-foreground">
-                        {finalReport.key_turning_points.slice(0, 5).map((point, idx) => (
-                          <li key={`turning-point-${idx}`} className="rounded-md border border-border bg-background/80 px-2 py-1.5">
-                            {point}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {finalReport.html_slides ? (
-                      <div className="mt-2">
-                        <Button variant="outline" className="h-8 px-2.5 text-xs" onClick={exportFinalHtml}>
-                          Export Final HTML Report
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
               </>
             )}
           </div>
@@ -914,6 +994,7 @@ export function DeepSimulationSection() {
                 <div key={`rank-${agent.id}`} className="flex items-center justify-between rounded-md border border-border bg-card/85 px-2 py-1.5 text-xs">
                   <span className="inline-flex items-center gap-1.5 text-foreground">
                     <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[10px]">{idx + 1}</span>
+                    <PersonaAvatar personaId={agent.id} name={agent.name} size={18} />
                     <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: agent.color }} />
                     {agent.name}
                   </span>
@@ -939,6 +1020,7 @@ export function DeepSimulationSection() {
                   >
                     <div className="flex items-center justify-between gap-2">
                       <p className="inline-flex items-center gap-2 text-sm font-semibold">
+                        <PersonaAvatar personaId={agent.id} name={agent.name} size={18} />
                         <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: agent.color }} />
                         {agent.name}
                       </p>
@@ -948,6 +1030,7 @@ export function DeepSimulationSection() {
                       </Badge>
                     </div>
                     <p className="mt-1 text-[11px] text-muted-foreground">Confidence {Math.round(agent.confidence * 100)}% | Score {agent.score.toFixed(2)}</p>
+                    {agent.objective ? <p className="mt-1 text-[11px] text-muted-foreground">{agent.objective}</p> : null}
                     <p className="mt-2 rounded-md border border-border bg-background/80 px-2 py-1.5 text-[11px] text-muted-foreground">
                       Current move: {latestTool}
                     </p>
@@ -961,6 +1044,168 @@ export function DeepSimulationSection() {
           </div>
         </aside>
       </div>
+
+      {showResultCard && finalReport ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
+          <div className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-border bg-card p-4 shadow-2xl sim-scroll">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Simulation Result</p>
+                <p className="text-lg font-semibold text-foreground">Observer Final Report</p>
+              </div>
+              <button
+                type="button"
+                className="rounded-md border border-border bg-background p-1 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowResultCard(false)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mb-3 flex items-center justify-between gap-2 rounded-xl border border-border bg-background/80 px-3 py-2">
+              <p className="text-sm font-semibold text-foreground">{finalReport.summary}</p>
+              <Badge className="border border-primary/40 bg-primary/10 text-foreground">
+                Confidence {Math.round(finalReport.confidence * 100)}%
+              </Badge>
+            </div>
+
+            {finalReport.recommendation ? (
+              <div className="mb-3 rounded-xl border border-border bg-background/80 p-3">
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Recommendation</p>
+                <p className="mt-1 text-sm leading-relaxed text-foreground">{finalReport.recommendation}</p>
+              </div>
+            ) : null}
+
+            {finalReport.key_turning_points.length > 0 ? (
+              <div className="mb-3 rounded-xl border border-border bg-background/80 p-3">
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Turning Points</p>
+                <ul className="mt-2 space-y-1 text-xs text-foreground">
+                  {finalReport.key_turning_points.slice(0, 8).map((point, idx) => (
+                    <li key={`result-turn-${idx}`} className="rounded-md border border-border bg-card px-2 py-1.5">
+                      {point}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {finalReport.persona_observations && finalReport.persona_observations.length > 0 ? (
+              <div className="mb-3 rounded-xl border border-border bg-background/80 p-3">
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Persona Breakdown</p>
+                <div className="mt-2 space-y-2">
+                  {finalReport.persona_observations.slice(0, 10).map((persona) => (
+                    <div key={`result-persona-${persona.persona_id}`} className="rounded-md border border-border bg-card px-2 py-2">
+                      <p className="text-xs font-semibold text-foreground">
+                        {persona.name} | {persona.role}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{persona.objective}</p>
+                      <p className="mt-1 text-xs text-foreground">{persona.stance}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {finalReport.html_slides ? (
+              <Button variant="outline" className="h-8 px-2.5 text-xs" onClick={exportFinalHtml}>
+                Export Final HTML Report
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {showInfoCard ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-border bg-card p-4 shadow-2xl">
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">How The Game Works</p>
+                <p className="text-lg font-semibold text-foreground">Deep Simulation Rules</p>
+              </div>
+              <button
+                type="button"
+                className="rounded-md border border-border bg-background p-1 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowInfoCard(false)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[65vh] space-y-3 overflow-y-auto rounded-xl border border-border bg-background/80 p-3 text-sm leading-relaxed text-foreground sim-scroll">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Objective</p>
+                <p>
+                  Run a multi-day strategy simulation to test a business decision under uncertainty. The goal is not to
+                  "beat" a game board, but to learn which strategy mix improves `revenue`, `margin`, and `sentiment`
+                  while controlling `churn_risk`.
+                </p>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Setup</p>
+                <p>`1 tick = 1 day` in simulation time.</p>
+                <p>You choose the number of ticks before start. More ticks = deeper scenario evolution.</p>
+                <p>Personas are generated dynamically by the orchestrator, based on your query and scenario context.</p>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Per-Tick Flow</p>
+                <p>1. Active strategists are selected for the day.</p>
+                <p>2. Each active strategist rolls and moves to a district tile.</p>
+                <p>3. District effects apply pressure or boosts to KPI dimensions.</p>
+                <p>4. Strategists think in real time, may call tools, and may submit action intents.</p>
+                <p>5. Intents are validated and conflicts resolved; accepted intents change world KPIs.</p>
+                <p>6. Crisis card may trigger and create external shock (mitigated by matching actions).</p>
+                <p>7. Scores update from move quality, intent confidence, and KPI contribution.</p>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">KPI Rules</p>
+                <p><strong>Revenue</strong>: top-line impact from pricing, demand, and campaign effects.</p>
+                <p><strong>Margin</strong>: unit-economics efficiency and cost discipline.</p>
+                <p><strong>Brand Trust (Sentiment)</strong>: customer perception trajectory.</p>
+                <p><strong>Churn Risk</strong>: likelihood of customer loss; lower is better.</p>
+                <p>
+                  Good runs usually raise `revenue/margin/sentiment` while keeping `churn_risk` flat or declining.
+                </p>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Action & Validation Rules</p>
+                <p>Allowed intent categories include `move`, `price_adjust`, `spend_shift`, `campaign`, `procurement`, `wait`.</p>
+                <p>Low-quality or invalid intents can be rejected by engine constraints.</p>
+                <p>When multiple intents conflict, resolver keeps the strongest compatible set.</p>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Crisis Rules</p>
+                <p>Crisis cards represent exogenous market shocks (competitor move, supply issue, sentiment event).</p>
+                <p>
+                  If strategist intents include matching counter-actions, shock impact is partially mitigated;
+                  otherwise KPI downside applies at near full force.
+                </p>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">How To Read The UI</p>
+                <p><strong>Left panel</strong>: controls, KPI snapshots, score trends.</p>
+                <p><strong>Center panel</strong>: board state + selected strategist live transcript and tool calls.</p>
+                <p><strong>Right panel</strong>: all strategist cards with confidence, score, current move, preview.</p>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">End Of Simulation</p>
+                <p>
+                  When the final tick completes, `Result` unlocks. Open it to view observer summary, turning points,
+                  per-persona observations, and recommendation.
+                </p>
+                <p>Use export to download the final HTML slides report for presentation/replay.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
