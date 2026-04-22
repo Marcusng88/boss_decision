@@ -508,6 +508,7 @@ export function NetworkSimulationSection() {
 
   function handleCanvasPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (dragNodeRef.current) return;
+    setActiveDialogNodeId(null);
     dragCanvasRef.current = {
       active: true,
       startX: event.clientX - offset.x,
@@ -679,7 +680,15 @@ export function NetworkSimulationSection() {
                 const iconSize = isSelected ? 52 : 44;
                 const personaSize = isSelected ? 22 : 18;
                 return (
-                  <g key={node.id} onClick={() => setSelectedNodeId(node.id)}>
+                  <g
+                    key={node.id}
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      setSelectedNodeId(node.id);
+                      if (nodeNarratives[node.id]) setActiveDialogNodeId(node.id);
+                    }}
+                    onClick={() => setSelectedNodeId(node.id)}
+                  >
                     <circle
                       cx={node.x}
                       cy={node.y}
@@ -844,7 +853,13 @@ export function NetworkSimulationSection() {
                   }`}
                 >
                   <p className="mb-1 font-semibold uppercase tracking-[0.12em] text-muted-foreground">{message.role}</p>
-                  <p>{message.text}</p>
+                  {message.role === "observer" ? (
+                    <div className="break-words leading-relaxed text-foreground [&_a]:text-primary [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_li]:ml-4 [&_li]:list-disc [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:whitespace-pre-wrap [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/40 [&_pre]:p-2">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p>{message.text}</p>
+                  )}
                 </div>
               ))}
             </div>

@@ -17,7 +17,7 @@ const NetworkSimulationLive = () => {
             </div>
             <div>
               <h1 className="text-3xl leading-none text-foreground">Network Simulation Lab</h1>
-              <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Live Relationship World (Mock First)</p>
+              <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Live Relationship World</p>
             </div>
           </div>
           <div className="flex items-center gap-3">

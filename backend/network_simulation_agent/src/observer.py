@@ -7,6 +7,7 @@ from typing import Any
 
 from .memory import get_run_dir
 from .memory import read_events
+from .model import get_observer_chat_model
 
 FINAL_REPORT_FILENAME = "final_report.json"
 OBSERVER_SUMMARY_FILENAME = "observer_summary.md"
@@ -80,6 +81,7 @@ def build_observer_answer(base_dir: Path, session_id: str, question: str, summar
 
     matched = _select_grounding_events(question=question, events=events)
     citations = [_to_citation(item) for item in matched]
+    recent_narratives = _extract_recent_narratives(events=events, max_items=6)
 
     final_result = _extract_final_result(events)
     answer_text = _compose_answer(
@@ -87,6 +89,7 @@ def build_observer_answer(base_dir: Path, session_id: str, question: str, summar
         final_result=final_result,
         citations=citations,
         summary=summary,
+        recent_narratives=recent_narratives,
     )
     return {
         "answer": answer_text,
@@ -162,7 +165,7 @@ def build_storyline_markdown(
             reason = str(narrative.get("reason", "")).strip()
             watch_next = str(narrative.get("watch_next", "")).strip()
             node_id = str(turn.get("node_id", "node")).strip()
-            lines.append(f"### Day {day} · {node_id}")
+            lines.append(f"### Day {day} - {node_id}")
             lines.append(f"**{headline}**")
             if summary_short:
                 lines.append(summary_short)
@@ -249,19 +252,170 @@ def _compose_answer(
     final_result: dict[str, Any],
     citations: list[dict[str, Any]],
     summary: str,
+    recent_narratives: list[dict[str, str]],
 ) -> str:
-    """Compose concise grounded answer text from final KPI outcome and cited evidence."""
+    """Compose grounded observer answer with intent-aware fallback and model enhancement."""
     kpis = final_result.get("kpis") if isinstance(final_result, dict) else {}
     revenue = float(kpis.get("revenue_delta", 0.0)) if isinstance(kpis, dict) else 0.0
     cost = float(kpis.get("cost_delta", 0.0)) if isinstance(kpis, dict) else 0.0
     risk = float(kpis.get("risk_delta", 0.0)) if isinstance(kpis, dict) else 0.0
     summary_text = str(final_result.get("summary") or summary or "No summary available.")
+    question_text = question.strip()
+    question_l = question_text.lower()
     cited_ids = ", ".join(
         f"seq:{citation.get('seq')}/tick:{citation.get('tick')}" for citation in citations[:3]
     )
-    return (
-        f"Answer to: {question}\n"
-        f"Final KPI trajectory: revenue {revenue:+.2%}, cost {cost:+.2%}, risk {risk:+.2%}.\n"
-        f"Observer summary: {summary_text}\n"
-        f"Grounded on events: {cited_ids if cited_ids else 'none'}."
+
+    model_answer = _try_model_answer(
+        question=question_text,
+        summary_text=summary_text,
+        revenue=revenue,
+        cost=cost,
+        risk=risk,
+        citations=citations,
+        recent_narratives=recent_narratives,
     )
+    if model_answer:
+        return model_answer
+
+    if _is_greeting(question_l):
+        return (
+            "I am tracking this completed simulation run and can answer grounded questions.\n"
+            "Try asking:\n"
+            "- What happened in the last few days?\n"
+            "- Does the run support a 10% price increase?\n"
+            "- What risks should we monitor next?\n"
+            f"Current trajectory: revenue {revenue:+.2%}, cost {cost:+.2%}, risk {risk:+.2%}."
+        )
+
+    if _is_status_question(question_l):
+        highlight_lines = _format_narrative_highlights(recent_narratives=recent_narratives, max_items=3)
+        highlights_block = "\n".join(highlight_lines) if highlight_lines else "- No recent node highlights captured."
+        return (
+            "Current run snapshot:\n"
+            f"- Revenue: {revenue:+.2%}\n"
+            f"- Cost: {cost:+.2%}\n"
+            f"- Risk: {risk:+.2%}\n"
+            f"- Summary: {summary_text}\n"
+            "Recent highlights:\n"
+            f"{highlights_block}\n"
+            f"Grounding: {cited_ids if cited_ids else 'none'}."
+        )
+
+    return (
+        f"Answer to: {question_text}\n"
+        f"- Revenue: {revenue:+.2%}\n"
+        f"- Cost: {cost:+.2%}\n"
+        f"- Risk: {risk:+.2%}\n"
+        f"- Observer summary: {summary_text}\n"
+        f"- Grounding: {cited_ids if cited_ids else 'none'}."
+    )
+
+
+def _extract_recent_narratives(events: list[dict[str, Any]], max_items: int = 6) -> list[dict[str, str]]:
+    """Extract recent node narratives for observer-chat context."""
+    rows: list[dict[str, str]] = []
+    for item in events:
+        event = item.get("event")
+        if not isinstance(event, dict) or event.get("type") != "node_message":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        narrative = message.get("narrative")
+        if not isinstance(narrative, dict):
+            continue
+        rows.append(
+            {
+                "tick": str(item.get("tick", "?")),
+                "node_id": str(message.get("node_id", "node")),
+                "headline": str(narrative.get("headline", "")),
+                "summary_short": str(narrative.get("summary_short", "")),
+            }
+        )
+    return rows[-max_items:]
+
+
+def _is_greeting(question_l: str) -> bool:
+    """Return true when user input is mainly a greeting or acknowledgement."""
+    compact = re.sub(r"[^a-z ]+", " ", question_l).strip()
+    if compact in {"hi", "hello", "hey", "yo", "thanks", "thank you"}:
+        return True
+    tokens = [token for token in compact.split() if token]
+    return len(tokens) <= 2 and any(token in {"hi", "hello", "hey"} for token in tokens)
+
+
+def _is_status_question(question_l: str) -> bool:
+    """Return true for broad status/progress questions."""
+    return any(
+        phrase in question_l
+        for phrase in {"what is happening", "what's happening", "status", "what happened", "current situation"}
+    )
+
+
+def _format_narrative_highlights(recent_narratives: list[dict[str, str]], max_items: int = 3) -> list[str]:
+    """Format recent node highlights into concise lines."""
+    rows = recent_narratives[-max_items:]
+    lines: list[str] = []
+    for row in rows:
+        lines.append(
+            f"- Day {row.get('tick', '?')} {row.get('node_id', 'node')}: "
+            f"{row.get('headline', 'Node update')} - {row.get('summary_short', '')}"
+        )
+    return lines
+
+
+def _try_model_answer(
+    question: str,
+    summary_text: str,
+    revenue: float,
+    cost: float,
+    risk: float,
+    citations: list[dict[str, Any]],
+    recent_narratives: list[dict[str, str]],
+) -> str | None:
+    """Attempt model-generated observer answer grounded on run evidence."""
+    model = get_observer_chat_model()
+    if model is None:
+        return None
+
+    citations_pack = [
+        {
+            "seq": row.get("seq"),
+            "tick": row.get("tick"),
+            "event_type": row.get("event_type"),
+            "excerpt": row.get("excerpt"),
+        }
+        for row in citations[:5]
+    ]
+    prompt = (
+        "You are the observer for a completed network simulation run.\n"
+        "Answer in plain business language for non-technical users.\n"
+        "Rules:\n"
+        "- Be concise and directly answer the user question.\n"
+        "- Use evidence from provided citations/highlights only.\n"
+        "- If user input is a greeting, acknowledge briefly and offer 3 useful follow-up questions.\n"
+        "- Use markdown bullets when listing points.\n"
+        "- Do not mention internal API/events/schema.\n\n"
+        f"User question:\n{question}\n\n"
+        "Run summary:\n"
+        f"- Observer summary: {summary_text}\n"
+        f"- Revenue delta: {revenue:+.2%}\n"
+        f"- Cost delta: {cost:+.2%}\n"
+        f"- Risk delta: {risk:+.2%}\n\n"
+        f"Recent node highlights:\n{json.dumps(recent_narratives, ensure_ascii=True)}\n\n"
+        f"Grounding citations:\n{json.dumps(citations_pack, ensure_ascii=True)}"
+    )
+    try:
+        response = model.invoke(prompt)
+    except Exception:
+        return None
+
+    content = getattr(response, "content", response)
+    if isinstance(content, list):
+        content = "".join(
+            str(item.get("text", "")) if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    text = str(content).strip()
+    return text[:2200] if text else None

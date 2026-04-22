@@ -64,3 +64,8 @@ def get_world_builder_model() -> Any:
 def get_node_turn_model() -> Any:
     """Return model used for per-node action generation."""
     return _get_model(os.getenv("NETWORK_NODE_MODEL", _infer_default_model()))
+
+
+def get_observer_chat_model() -> Any:
+    """Return model used for observer-chat answers."""
+    return _get_model(os.getenv("NETWORK_OBSERVER_MODEL", _infer_default_model()))
