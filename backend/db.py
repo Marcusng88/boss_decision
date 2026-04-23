@@ -39,6 +39,20 @@ class DatabaseService:
             .execute()
         return response.data
 
+    async def search_employees_by_name(self, name: str):
+        """Case-insensitive search across common name fields."""
+        for field in ('name', 'full_name', 'employee_name'):
+            try:
+                response = self.client.table('employee') \
+                    .select('*, department:dept_id(*)') \
+                    .ilike(field, f'%{name}%') \
+                    .execute()
+                if response.data:
+                    return response.data
+            except Exception:
+                continue
+        return []
+
     # ── HR ────────────────────────────────────────────────────────────────
 
     async def get_employee_hr_records(self, employee_id: int):

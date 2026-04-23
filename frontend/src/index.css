@@ -58,6 +58,13 @@ All colors MUST be HSL.
 
     --transition-smooth: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 
+    --agent-hr: hsl(263 70% 50%);
+    --agent-legal: hsl(220 80% 35%);
+    --agent-sales: hsl(160 70% 40%);
+    --agent-finance: hsl(38 92% 50%);
+    --agent-marketing: hsl(330 80% 55%);
+    --agent-supply: hsl(22 90% 50%);
+
     --sidebar-background: 0 0% 98%;
 
     --sidebar-foreground: 240 5.3% 26.1%;

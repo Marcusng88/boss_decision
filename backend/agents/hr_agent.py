@@ -1,5 +1,6 @@
 """HR Agent — performance, attendance, warnings, PIP status."""
 import json
+import re
 from typing import Dict, List, Any
 from .base_agent import BaseAgent, AgentInsight
 from .llm_client import llm_json
@@ -23,35 +24,72 @@ class HRAgent(BaseAgent):
 
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         evidence = []
+
+        # Resolve employee_id: direct ID wins, name search is fallback
+        employee_id = None
+
         if context.get('target_type') == 'employee' and context.get('target_id'):
-            employee_id = context['target_id']
-            try:
-                employee = await self.db.get_employee(employee_id)
-                if employee:
-                    evidence.append({'source': 'employee', 'type': 'profile', 'data': employee})
-            except Exception:
-                pass
-            hr_records = await self.db.get_employee_hr_records(employee_id)
-            evidence.extend([
-                {'source': 'hr_record', 'type': 'performance_review',
-                 'record_id': r.get('hr_id'), 'data': r}
-                for r in hr_records
-            ])
+            employee_id = int(context['target_id'])
+        elif context.get('target_name'):
+            # Strip "employee #NNN" prefix to get a plain name
+            raw = re.sub(r'employee\s*#?\d*\s*', '', str(context['target_name']),
+                         flags=re.IGNORECASE).strip()
+            if raw and not raw.isdigit():
+                try:
+                    results = await self.db.search_employees_by_name(raw)
+                    if results:
+                        employee_id = results[0].get('employee_id')
+                except Exception:
+                    pass
+
+        if employee_id is None:
+            return evidence
+
+        # Employee profile
+        try:
+            employee = await self.db.get_employee(employee_id)
+            if employee:
+                evidence.append({'source': 'employee', 'type': 'profile', 'data': employee})
+        except Exception:
+            pass
+
+        # HR records — kept outside inner try/except so failures surface (original behaviour)
+        hr_records = await self.db.get_employee_hr_records(employee_id)
+        evidence.extend([
+            {'source': 'hr_record', 'type': 'performance_review',
+             'record_id': r.get('hr_id'), 'data': r}
+            for r in hr_records
+        ])
+
         return evidence
 
     async def analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
         hr_records = [e['data'] for e in evidence if e['source'] == 'hr_record']
+        employee_profile = next((e['data'] for e in evidence if e['source'] == 'employee'), None)
 
         if not hr_records:
+            if employee_profile:
+                name = (employee_profile.get('name')
+                        or employee_profile.get('full_name')
+                        or 'Unknown')
+                return AgentInsight(
+                    agent_name="HR", emoji="👤",
+                    findings=[f"Employee found: {name}",
+                               "No performance review records on file"],
+                    risks=["Lack of HR records limits performance assessment"],
+                    recommendation="Initiate formal performance tracking before making personnel decisions",
+                    confidence=0.2,
+                    evidence_used=evidence,
+                    data_summary="No HR records on file",
+                )
             return AgentInsight(
                 agent_name="HR", emoji="👤",
-                findings=["No HR records found"],
-                risks=["Insufficient HR data for analysis"],
-                recommendation="Gather HR records before proceeding",
+                findings=["Employee not found or no HR records available"],
+                risks=["Cannot assess performance, attendance, or disciplinary history without data"],
+                recommendation="Verify employee ID and gather HR records before proceeding",
                 confidence=0.0,
             )
 
-        # Build data summary for LLM
         data_str = json.dumps(hr_records, default=str, indent=2)
         user_msg = f"Query: {query}\n\nHR Records:\n{data_str}"
 
@@ -69,7 +107,6 @@ class HRAgent(BaseAgent):
                 trend=result.get("trend", "flat"),
             )
         except Exception as e:
-            # Fallback rule-based
             return self._rule_based(hr_records, evidence, str(e))
 
     def _rule_based(self, hr_records, evidence, error_note="") -> AgentInsight:
@@ -95,7 +132,7 @@ class HRAgent(BaseAgent):
         rec = (
             "Initiate mandatory 60-day PIP before considering termination"
             if avg_score < 2.5 else
-            "Performance issues present; monitor closely"
+            "Performance issues present; monitor closely with structured review"
         )
         metric = f"{avg_score:.1f}/5 score" if scores else "N/A"
         trend = "down" if len(scores) >= 2 and scores[0] < scores[-1] else "flat"

@@ -19,14 +19,14 @@ Primary example decisions include:
 
 The system flow follows this pipeline:
 
-1. **User Query** → Chat interface sends query to `POST /api/analyze`
-2. **Intent Detection** → LLM determines which agents to invoke + extracts entity context
+1. **User Query + Agent Selection** → Chat interface sends query + optional `selected_agents` to `POST /api/analyze/stream`
+2. **Intent Detection** → LLM determines which agents to invoke + extracts entity context (overridden if user selected agents manually)
 3. **Parallel Agent Execution** → Selected domain agents run concurrently via `asyncio.gather`
-4. **Evidence Retrieval** → Each agent fetches relevant Supabase tables
-5. **LLM Analysis** → Each agent calls Zhipu GLM to analyze its evidence
+4. **Evidence Retrieval** → Each agent fetches relevant Supabase tables (with multi-level fallbacks)
+5. **LLM Analysis** → Each agent calls Zhipu GLM to analyze its evidence; results streamed via SSE as each completes
 6. **Manager Synthesis** → Manager agent calls LLM to generate conservative/aggressive/final decision
 7. **Persist + Return** → Decision saved to `decision_case` + `decision_output`, full JSON returned
-8. **Frontend Display** → Staged animated reveal (agent cards → perspectives → final decision)
+8. **Frontend Display** → Agent cards appear one-by-one as they stream in; typewriter effect on final verdict
 
 Core design principle: **decisions must be evidence-linked and auditable**, not just free-form LLM output.
 
@@ -34,9 +34,9 @@ Core design principle: **decisions must be evidence-linked and auditable**, not 
 
 ## Repository Layout
 
-- `frontend/`: React + TypeScript + Vite — ChatGPT-style chat interface
-- `frontend/src/components/chat/`: New chat UI components (AgentCard, DecisionResponse, ChatInput, ChatSidebar, etc.)
-- `frontend/src/lib/api.ts`: Typed API client calling `POST /api/analyze`
+- `frontend/`: React + TypeScript + Vite — ChatGPT/Gemini-style chat interface with streaming
+- `frontend/src/components/chat/`: Chat UI components (AgentCard, AgentAvatar, AgentSelector, DecisionResponse, ChatInput, ChatSidebar, etc.)
+- `frontend/src/lib/api.ts`: Typed API client — supports both SSE streaming (`analyzeDecisionStream`) and standard fetch (`analyzeDecision`)
 - `backend/`: FastAPI API, Supabase integration, full multi-agent system
 - `backend/agents/`: All 6 domain agents + manager + intent detector + LLM client
 - `backend/database/`: PostgreSQL schema and seed data + database docs
@@ -74,15 +74,33 @@ The LLM client lives in `backend/agents/llm_client.py`. It uses the `openai` Pyt
 | `GET /api/health` | Health + Supabase connectivity |
 | `GET /api/employees/{id}` | Employee profile + HR + sales records |
 | `GET /api/cases/{case_id}` | Decision case evidence + output |
-| `POST /api/analyze` | **Main endpoint** — full multi-agent pipeline, returns structured decision |
+| `POST /api/analyze` | Standard endpoint — full pipeline, waits for all agents, returns structured decision |
+| `POST /api/analyze/stream` | **Preferred endpoint** — SSE streaming; yields events as each agent completes |
 
-### `POST /api/analyze` Flow
+### `POST /api/analyze/stream` SSE Event Flow
+
+```
+data: {"type": "status", "message": "Detecting intent…"}
+data: {"type": "intent", "agents": ["hr", "legal"]}
+data: {"type": "agent_start", "agent": "hr"}
+data: {"type": "agent_start", "agent": "legal"}
+data: {"type": "agent_done", "agent": "hr", "insight": {...}}
+data: {"type": "agent_done", "agent": "legal", "insight": {...}}
+data: {"type": "status", "message": "Synthesizing perspectives…"}
+data: {"type": "synthesis", "conservative": {...}, "aggressive": {...}}
+data: {"type": "complete", "result": {...full AnalysisResponse...}}
+```
+
+Both endpoints accept `selected_agents: string[]` in the request body to override auto-detection.
+
+### `POST /api/analyze` Flow (non-streaming)
 
 1. `detect_intent(query)` → `{agents, target_type, target_id, query_category}`
-2. `db.create_decision_case(...)` → `case_id`
-3. `manager.orchestrate(query, context)` → runs selected agents in parallel
-4. `db.save_decision_output(...)` → persists to Supabase
-5. Returns `AnalyzeResponse` with `agent_insights`, `conservative_view`, `aggressive_view`, `final_decision`
+2. Override agents if `selected_agents` provided in request
+3. `db.create_decision_case(...)` → `case_id`
+4. `manager.orchestrate(query, context)` → runs selected agents in parallel
+5. `db.save_decision_output(...)` → persists to Supabase
+6. Returns `AnalyzeResponse` with `agent_insights`, `conservative_view`, `aggressive_view`, `final_decision`
 
 ### Database Service Layer (`backend/db.py`)
 
@@ -91,6 +109,7 @@ Methods for all tables:
 | Method | Table |
 |---|---|
 | `get_employee(id)` | `employee` |
+| `search_employees_by_name(name)` | `employee` — ILIKE search across name fields |
 | `get_employee_hr_records(id)` | `hr_record` |
 | `get_employee_sales_records(id)` | `sales_record` |
 | `get_legal_policies(category?)` | `legal_policy` ← **renamed from `legal_record`** |
@@ -114,28 +133,44 @@ Methods for all tables:
 
 ### All Implemented Agents
 
-| Agent | File | Tables Queried | LLM? |
-|---|---|---|---|
-| HR | `hr_agent.py` | `employee`, `hr_record` | ✅ (rule-based fallback) |
-| Sales | `sales_agent.py` | `sales_record` | ✅ |
-| Legal | `legal_agent.py` | `legal_policy`, `legal_contract`, `legal_cases` | ✅ |
-| Finance | `finance_agent.py` | `finance_record` | ✅ |
-| Marketing | `marketing_agent.py` | `marketing_record` | ✅ |
-| Supply Chain | `supply_chain_agent.py` | `supply_record` | ✅ |
-| Manager | `manager_agent.py` | — (orchestrator) | ✅ LLM synthesis |
+| Agent | File | Tables Queried | LLM? | Fallback Strategy |
+|---|---|---|---|---|
+| HR | `hr_agent.py` | `employee`, `hr_record` | ✅ | Rule-based; name search if no ID |
+| Sales | `sales_agent.py` | `sales_record` | ✅ | Rule-based |
+| Legal | `legal_agent.py` | `legal_policy`, `legal_contract`, `legal_cases` | ✅ | Generic compliance findings |
+| Finance | `finance_agent.py` | `finance_record` | ✅ | Employee → dept → general records cascade |
+| Marketing | `marketing_agent.py` | `marketing_record` | ✅ | Rule-based |
+| Supply Chain | `supply_chain_agent.py` | `supply_record` | ✅ | Rule-based |
+| Manager | `manager_agent.py` | — (orchestrator) | ✅ LLM synthesis | Rule-based synthesis |
+
+### HR Agent Data Retrieval (`hr_agent.py`)
+
+Three-step lookup:
+1. Direct `employee_id` lookup if `target_id` is set
+2. Name-based ILIKE search via `search_employees_by_name()` if `target_name` is set but no ID
+3. Returns informative message if employee found but no HR records exist
+
+### Finance Agent Data Retrieval (`finance_agent.py`)
+
+Three-level cascade:
+1. Employee-level `finance_record` (filtered by `employee_id`)
+2. Department-level `finance_record` (via employee's `dept_id`) if employee records are empty
+3. General recent `finance_record` rows as last resort
 
 ### Intent Detector (`backend/agents/intent_detector.py`)
 
 - Calls Zhipu LLM with agent domain descriptions
 - Returns `{agents: [...], target_type, target_id, query_category}`
 - Falls back to keyword matching if LLM fails
+- `selected_agents` in the request body overrides this entirely
 
 ### Manager Agent (`backend/agents/manager_agent.py`)
 
 - Builds agent registry on init (all 6 domain agents)
 - `orchestrate(query, context)`: runs selected agents via `asyncio.gather`
-- LLM synthesis produces `conservative`, `aggressive`, `final_decision`
-- Rule-based fallback if LLM fails
+- `_synthesize_with_llm(insights, query)`: LLM produces `conservative`, `aggressive`, `final_decision`
+- `_rule_based_synthesis(insights)`: fallback if LLM fails
+- `_empty_result(query)`: fallback if no agents return insights
 
 ---
 
@@ -149,7 +184,7 @@ Methods for all tables:
 | `department` | Org structure |
 | `hr_record` | Performance, attendance, warnings, PIP |
 | `sales_record` | Deals, revenue, pipeline |
-| `finance_record` | Budget, costs, KPIs |
+| `finance_record` | Budget, costs, KPIs — may be at dept level, not per-employee |
 | `marketing_record` | Campaigns, ROI |
 | `supply_record` | Inventory, procurement |
 | `legal_policy` | Policies, compliance rules (was `legal_record`) |
@@ -166,33 +201,63 @@ Methods for all tables:
 
 ## Frontend (React + Vite + Tailwind)
 
-### New Chat Interface (`frontend/src/`)
-
-Completely redesigned as a ChatGPT/Gemini-style chat interface:
+### Chat Interface (`frontend/src/`)
 
 | Component | Location | Purpose |
 |---|---|---|
-| `Index.tsx` | `pages/` | Main container, conversation state, API calls |
+| `Index.tsx` | `pages/` | Main container; uses SSE streaming, incremental state updates |
 | `ChatSidebar.tsx` | `components/chat/` | Conversation history, New Chat |
-| `ChatMessage.tsx` | `components/chat/` | User/assistant message bubbles |
-| `ChatInput.tsx` | `components/chat/` | Auto-resize textarea, Enter to send |
-| `DecisionResponse.tsx` | `components/chat/` | Staged reveal: agents → perspectives → decision |
-| `AgentCard.tsx` | `components/chat/` | Individual agent insight card with metric + trend |
-| `EmptyState.tsx` | `components/chat/` | Welcome screen with sample queries |
-| `api.ts` | `lib/` | Typed fetch client for `POST /api/analyze` |
+| `ChatMessage.tsx` | `components/chat/` | Renders user bubbles + streaming/static assistant responses |
+| `ChatInput.tsx` | `components/chat/` | Auto-resize textarea + AgentSelector row above input |
+| `AgentSelector.tsx` | `components/chat/` | Gemini-style toggle pill chips for each agent |
+| `AgentAvatar.tsx` | `components/chat/` | Custom SVG cartoon characters per department; exports `AGENT_COLORS` |
+| `AgentCard.tsx` | `components/chat/` | Cartoon-styled insight card with gradient header; `AgentCardSkeleton` for in-progress |
+| `DecisionResponse.tsx` | `components/chat/` | Streaming mode (live build-up) + static mode (history replay); typewriter on verdict |
+| `EmptyState.tsx` | `components/chat/` | Welcome screen showing 6 cartoon agents + sample queries |
+| `api.ts` | `lib/` | `analyzeDecisionStream()` (SSE) + `analyzeDecision()` (standard fetch) |
 
-### Staged Animation Flow
+### Streaming Frontend Flow
 
-When API response arrives, reveal happens in 3 stages:
-1. `agents` (0ms) — Agent insight cards appear
-2. `perspectives` (1400ms) — Conservative vs Aggressive views
-3. `decision` (2200ms) — Final decision gradient card
+1. User submits query (optional: selects agents via chips)
+2. Message immediately shows streaming state with live "thinking bar"
+3. Backend SSE events arrive → state updated incrementally:
+   - `intent` → shows which agents will run with status badges
+   - `agent_start` → agent shows as spinning skeleton card
+   - `agent_done` → skeleton replaced with filled cartoon card
+   - `synthesis` → Conservative/Aggressive panels fade in
+   - `complete` → final decision card appears with typewriter verdict
+4. On complete, `streaming` state replaced with `data + stage: 'decision'` for persistence
+
+### Cartoon Agent Avatars (`AgentAvatar.tsx`)
+
+Each agent has a distinct custom SVG character:
+
+| Agent | Key Design Elements | Gradient |
+|---|---|---|
+| HR | Purple buns, clipboard | `violet-500 → purple-700` |
+| Legal | White lawyer wig, scales | `blue-600 → blue-900` |
+| Sales | Spiky hair, rising chart | `emerald-400 → green-700` |
+| Finance | Round glasses, calculator | `yellow-400 → amber-600` |
+| Marketing | Wild star hair, megaphone | `pink-400 → rose-700` |
+| Supply Chain | Hard hat, box/package | `orange-400 → red-600` |
+
+`AGENT_COLORS` exported from `AgentAvatar.tsx` provides per-agent `gradient`, `ring`, `text`, `light` Tailwind classes used across `AgentCard`, `AgentSelector`, `DecisionResponse`, and `EmptyState`.
 
 ### Frontend API Contract
 
-`POST /api/analyze` response fields consumed by frontend:
+`POST /api/analyze` and `POST /api/analyze/stream` both accept:
 ```typescript
 {
+  query: string
+  selected_agents?: string[]   // overrides auto-detect
+}
+```
+
+Response shape (both endpoints):
+```typescript
+{
+  case_id: number | null
+  query: string
   agents_invoked: string[]
   agent_insights: { agent_name, emoji, findings, risks, recommendation,
                     confidence, data_summary, metric_value, trend }[]
@@ -210,11 +275,9 @@ When API response arrives, reveal happens in 3 stages:
 
 ```bash
 cd backend
-# Activate venv
 .venv/Scripts/python.exe main.py
 # or: .venv/Scripts/python.exe -m uvicorn main:app --reload
-# API available at http://localhost:8000
-# Swagger docs at http://localhost:8000/docs
+# API at http://localhost:8000  |  Docs at http://localhost:8000/docs
 ```
 
 ### Frontend
@@ -241,19 +304,25 @@ ZHIPU_MODEL=ilmu-glm-5.1
 
 ## Current State
 
-### Working Today ✅
+### Working ✅
 
 - Full intent detection → agent selection → parallel execution → LLM analysis → manager synthesis
-- All 6 domain agents implemented with Zhipu LLM + rule-based fallback
-- `POST /api/analyze` returns real AI-generated decisions based on Supabase data
-- ChatGPT-style chat interface with conversation history and animated agent reveal
-- Supabase connected: all tables accessible including `legal_policy`, `legal_contract`, `legal_cases`
+- All 6 domain agents with Zhipu LLM + rule-based fallback
+- **SSE streaming**: `POST /api/analyze/stream` streams agent results as they complete
+- **Agent selector**: User can manually choose agents via toggle chips; overrides auto-detect
+- **Cartoon agent avatars**: Custom SVG characters per department in all cards + empty state
+- **Live progress display**: Spinning placeholders while agents run, cards appear one-by-one
+- **Typewriter effect** on final decision verdict
+- **Finance data cascade**: Employee → dept → general records fallback
+- **HR name search**: `search_employees_by_name()` handles queries without explicit employee ID
+- ChatGPT/Gemini-style chat with conversation history sidebar
+- Supabase connected: all tables accessible
 
 ### Still Needed
 
 - OCR/ingestion pipeline (Kai Huang's task)
 - Vector retrieval for semantic evidence search
-- Integration tests for `/api/analyze` happy path
+- Integration tests for `/api/analyze/stream` happy path
 - `/extra-usage` plan for sustained hackathon sessions
 
 ---
@@ -263,7 +332,7 @@ ZHIPU_MODEL=ilmu-glm-5.1
 - **Keith**: DB structure, backend foundation, finance agent
 - **Kai Huang**: OCR + AI extraction/classification pipeline
 - **Marcus**: Manager personas and synthesis strategy
-- **Yihao**: HR + Legal agents, chat UI redesign
+- **Yihao**: HR + Legal agents, chat UI redesign, streaming architecture, cartoon UI
 - **Jialih**: Sales + Marketing + Supply Chain agents
 
 ---
@@ -274,4 +343,7 @@ ZHIPU_MODEL=ilmu-glm-5.1
 - All agents gracefully degrade: LLM failure → rule-based fallback → still returns `AgentInsight`
 - Manager agent lazy-loads domain agents on first instantiation
 - CORS allows `localhost:8080` and `localhost:8081` (Vite may use either)
+- Finance records in Supabase may not be keyed to individual employees — agent now cascades to dept/general level automatically
+- `AGENT_COLORS` in `AgentAvatar.tsx` is the single source of truth for per-agent color theming across the entire UI
+- SSE streaming uses `asyncio.create_task` inside the FastAPI generator — works correctly with uvicorn's async event loop
 - 78% of session usage comes from subagent-heavy operations — spawn subagents sparingly
