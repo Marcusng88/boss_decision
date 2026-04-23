@@ -1,18 +1,237 @@
-import { FormEvent, useState } from "react";
-import { AlertTriangle, ArrowRight, Brain, ChevronLeft, Loader2, MessageSquareText, ShieldCheck, ShieldX } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { AlertTriangle, Brain, ChevronLeft, Loader2, MessageSquareText, Scale } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { runSalesSupplyDebateSimulation, SalesSupplyDebateResponse } from "@/lib/sales-supply-debate-client";
+import { DebateSimulationResult, runSalesSupplyDebateSimulation, SalesSupplyDebateResponse } from "@/lib/sales-supply-debate-client";
+
+type DebateMessage = {
+  id: string;
+  round: number;
+  speaker: "sales" | "supply";
+  role: string;
+  agentId: string;
+  body: string;
+  marketSignal?: string;
+  validity?: "valid" | "invalid";
+  strictChecks?: string[];
+};
+
+const DebateChatPlayback = ({
+  session,
+  sessionKey,
+  onPlaybackComplete,
+}: {
+  session: DebateSimulationResult;
+  sessionKey: string;
+  onPlaybackComplete: (sessionKey: string, done: boolean) => void;
+}) => {
+  const messages = useMemo<DebateMessage[]>(() => {
+    return session.rounds.slice(0, 5).flatMap((debateRound) => [
+      {
+        id: `${session.supply_id}-r${debateRound.round}-sales`,
+        round: debateRound.round,
+        speaker: "sales" as const,
+        role: debateRound.sales_agent.role,
+        agentId: debateRound.sales_agent.agent_id,
+        body: debateRound.sales_agent.suggestion,
+        marketSignal: debateRound.sales_agent.market_signal,
+      },
+      {
+        id: `${session.supply_id}-r${debateRound.round}-supply`,
+        round: debateRound.round,
+        speaker: "supply" as const,
+        role: debateRound.supply_chain_agent.role,
+        agentId: debateRound.supply_chain_agent.agent_id,
+        body: debateRound.supply_chain_agent.response,
+        validity: debateRound.supply_chain_agent.validity,
+        strictChecks: debateRound.supply_chain_agent.strict_checks?.slice(0, 3) ?? [],
+      },
+    ]);
+  }, [session]);
+
+  const [visibleCount, setVisibleCount] = useState(0);
+
+  useEffect(() => {
+    setVisibleCount(0);
+    onPlaybackComplete(sessionKey, false);
+
+    if (!messages.length) {
+      onPlaybackComplete(sessionKey, true);
+      return;
+    }
+
+    let revealIndex = 0;
+    let timer: number | undefined;
+
+    const revealNext = () => {
+      revealIndex += 1;
+      setVisibleCount(revealIndex);
+
+      if (revealIndex >= messages.length) {
+        onPlaybackComplete(sessionKey, true);
+        return;
+      }
+
+      const nextSpeaker = messages[revealIndex].speaker;
+      const gapMs = nextSpeaker === "supply" ? 2300 : 1700;
+      timer = window.setTimeout(revealNext, gapMs);
+    };
+
+    timer = window.setTimeout(revealNext, 600);
+
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [messages, onPlaybackComplete, sessionKey]);
+
+  const isCompleted = visibleCount >= messages.length;
+  const nextSpeaker = !isCompleted ? messages[visibleCount]?.speaker : null;
+
+  return (
+    <div className="rounded-2xl border border-border bg-background/75 p-4">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Debate Chat Replay</p>
+        <Badge variant={isCompleted ? "secondary" : "default"} className={isCompleted ? "" : "animate-pulse"}>
+          {isCompleted ? "Debate Completed" : "Debate In Progress"}
+        </Badge>
+      </div>
+
+      <div className="max-h-[520px] space-y-3 overflow-y-auto pr-2 sim-scroll">
+        {messages.slice(0, visibleCount).map((message) => {
+          const isSales = message.speaker === "sales";
+          return (
+            <div key={message.id} className={`chat-pop flex ${isSales ? "justify-end" : "justify-start"}`}>
+              <article
+                className={`max-w-[92%] rounded-2xl border p-3 text-sm shadow-sm md:max-w-[80%] ${
+                  isSales
+                    ? "border-primary/25 bg-primary/10 text-foreground"
+                    : "border-accent/30 bg-accent/10 text-foreground"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.11em] text-muted-foreground">
+                    Round {message.round} | {message.role} ({message.agentId})
+                  </p>
+                  {!isSales && message.validity && (
+                    <Badge
+                      className={
+                        message.validity === "valid"
+                          ? "border border-success/40 bg-success/10 text-foreground"
+                          : "border border-destructive/40 bg-destructive/10 text-foreground"
+                      }
+                    >
+                      {message.validity === "valid" ? "Valid" : "Invalid"}
+                    </Badge>
+                  )}
+                </div>
+
+                <p className="mt-2 leading-relaxed">{message.body}</p>
+
+                {isSales && message.marketSignal && (
+                  <p className="mt-2 text-xs text-muted-foreground">Market signal: {message.marketSignal}</p>
+                )}
+
+                {!isSales && (message.strictChecks?.length ?? 0) > 0 && (
+                  <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                    {message.strictChecks?.map((check, idx) => (
+                      <li key={`${message.id}-check-${idx}`}>- {check}</li>
+                    ))}
+                  </ul>
+                )}
+              </article>
+            </div>
+          );
+        })}
+
+        {!isCompleted && nextSpeaker && (
+          <div className={`flex ${nextSpeaker === "sales" ? "justify-end" : "justify-start"}`}>
+            <div className="rounded-full border border-border bg-card px-4 py-2 text-xs text-muted-foreground">
+              <span className="debate-typing">
+                {nextSpeaker === "sales" ? "Sales Agent is preparing next response..." : "Supply Chain Agent is evaluating and replying..."}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const JudgeResultPanel = ({ session }: { session: DebateSimulationResult }) => {
+  if (!session.judge_result) {
+    return (
+      <Card className="border-border/80 bg-card/60">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Scale className="h-4 w-4 text-muted-foreground" />
+            Judge Result
+          </CardTitle>
+          <CardDescription>No judge output was returned for this debate.</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="judge-highlight border-border/80 bg-card/80">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Scale className="h-4 w-4 text-foreground" />
+          Judge Result Session
+        </CardTitle>
+        <CardDescription>AI-3 arbitration summary and final outcome for this debate.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            className={
+              session.final_result.status === "approved"
+                ? "border border-success/40 bg-success/10 text-foreground"
+                : "border border-destructive/40 bg-destructive/10 text-foreground"
+            }
+          >
+            Final: {session.final_result.status === "approved" ? "Approved" : "Rejected"}
+          </Badge>
+        </div>
+        <p className="rounded-lg border border-border bg-background/80 p-3 leading-relaxed">{session.final_result.conclusion}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge className="border border-border bg-background text-foreground">
+            Winner: {session.judge_result.winner === "sales" ? "Sales Agent" : "Supply Chain Agent"}
+          </Badge>
+          <Badge className="border border-border bg-background text-foreground">
+            Verdict: {session.judge_result.verdict === "execute" ? "Execute plan" : "Hold plan"}
+          </Badge>
+          <Badge className="border border-border bg-background text-foreground">
+            Confidence: {Math.round((session.judge_result.confidence ?? 0) * 100)}%
+          </Badge>
+        </div>
+        <p className="rounded-lg border border-border bg-background/80 p-3 leading-relaxed">{session.judge_result.rationale}</p>
+      </CardContent>
+    </Card>
+  );
+};
 
 const SalesSupplyDebateSimulator = () => {
   const [itemName, setItemName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SalesSupplyDebateResponse | null>(null);
+  const [playbackDoneBySession, setPlaybackDoneBySession] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setPlaybackDoneBySession({});
+  }, [result]);
+
+  const handlePlaybackComplete = useCallback((sessionKey: string, done: boolean) => {
+    setPlaybackDoneBySession((prev) => {
+      if (prev[sessionKey] === done) return prev;
+      return { ...prev, [sessionKey]: done };
+    });
+  }, []);
 
   const handleRun = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -139,8 +358,12 @@ const SalesSupplyDebateSimulator = () => {
               </CardContent>
             </Card>
 
-            {result.simulations.map((session) => (
-              <Card key={`${session.supply_id}-${session.item_name}`} className="bg-card/85">
+            {result.simulations.map((session) => {
+              const sessionKey = `${session.supply_id}-${session.item_name}`;
+              const isPlaybackDone = !!playbackDoneBySession[sessionKey];
+
+              return (
+              <Card key={sessionKey} className="bg-card/85">
                 <CardHeader>
                   <CardTitle className="text-lg">
                     Supply #{session.supply_id} - {session.item_name}
@@ -149,73 +372,31 @@ const SalesSupplyDebateSimulator = () => {
                     Inventory {session.inventory_context.inventory_level ?? "-"} | Forecast {session.inventory_context.demand_forecast ?? "-"} | Reorder {session.inventory_context.reorder_point ?? "-"}
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-3">
-                  {session.judge_result && (
-                    <Alert>
-                      <ShieldCheck className="h-4 w-4" />
-                      <AlertTitle>
-                        Judge (AI-3): {session.judge_result.winner === "sales" ? "Follow Sales Agent" : "Follow Supply Chain Agent"}
-                      </AlertTitle>
-                      <AlertDescription>
-                        {session.judge_result.rationale} (confidence {Math.round((session.judge_result.confidence ?? 0) * 100)}%)
-                      </AlertDescription>
-                    </Alert>
+                <CardContent className="space-y-4">
+                  <DebateChatPlayback
+                    session={session}
+                    sessionKey={sessionKey}
+                    onPlaybackComplete={handlePlaybackComplete}
+                  />
+                  {isPlaybackDone ? (
+                    <JudgeResultPanel session={session} />
+                  ) : (
+                    <Card className="border-border/80 bg-card/60">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                          <Scale className="h-4 w-4 text-muted-foreground" />
+                          Judge Result Session
+                        </CardTitle>
+                        <CardDescription>
+                          Judge result will appear after the full debate conversation is completed.
+                        </CardDescription>
+                      </CardHeader>
+                    </Card>
                   )}
-
-                  {session.rounds.map((debateRound) => (
-                    <div key={`${session.supply_id}-round-${debateRound.round}`} className="rounded-xl border border-border bg-background/70 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Round {debateRound.round}</p>
-                      <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto_1fr] md:items-start">
-                        <div className="rounded-lg border border-border bg-card/80 p-3 text-sm">
-                          <p className="font-semibold text-foreground">{debateRound.sales_agent.role} ({debateRound.sales_agent.agent_id})</p>
-                          <p className="mt-1 text-foreground">{debateRound.sales_agent.suggestion}</p>
-                          {debateRound.sales_agent.market_signal && (
-                            <p className="mt-2 text-xs text-muted-foreground">
-                              Market signal: {debateRound.sales_agent.market_signal}
-                            </p>
-                          )}
-                        </div>
-                        <div className="hidden md:flex items-center justify-center pt-5">
-                          <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                        </div>
-                        <div className="rounded-lg border border-border bg-card/80 p-3 text-sm">
-                          <p className="font-semibold text-foreground">{debateRound.supply_chain_agent.role} ({debateRound.supply_chain_agent.agent_id})</p>
-                          <div className="mt-1">
-                            {debateRound.supply_chain_agent.validity === "valid" ? (
-                              <Badge className="border border-success/40 bg-success/10 text-foreground">
-                                <ShieldCheck className="mr-1 h-3 w-3" />
-                                Valid
-                              </Badge>
-                            ) : (
-                              <Badge className="border border-destructive/40 bg-destructive/10 text-foreground">
-                                <ShieldX className="mr-1 h-3 w-3" />
-                                Invalid
-                              </Badge>
-                            )}
-                          </div>
-                          {debateRound.supply_chain_agent.strict_checks?.length > 0 && (
-                            <div className="mt-2 space-y-1">
-                              {debateRound.supply_chain_agent.strict_checks.slice(0, 3).map((check, idx) => (
-                                <p key={`${debateRound.round}-check-${idx}`} className="text-xs text-muted-foreground">
-                                  • {check}
-                                </p>
-                              ))}
-                            </div>
-                          )}
-                          <p className="mt-2 text-foreground">{debateRound.supply_chain_agent.response}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-
-                  <Alert variant={session.final_result.status === "approved" ? "default" : "destructive"}>
-                    {session.final_result.status === "approved" ? <ShieldCheck className="h-4 w-4" /> : <ShieldX className="h-4 w-4" />}
-                    <AlertTitle>{session.final_result.status === "approved" ? "Final: Approved" : "Final: Rejected"}</AlertTitle>
-                    <AlertDescription>{session.final_result.conclusion}</AlertDescription>
-                  </Alert>
                 </CardContent>
               </Card>
-            ))}
+            );
+            })}
           </div>
         )}
       </main>
