@@ -1,108 +1,208 @@
-import { useState } from "react";
-import { Brain } from "lucide-react";
-import { InputPanel } from "@/components/decision/InputPanel";
-import { DataRetrieved } from "@/components/decision/DataRetrieved";
-import { AgentInsights } from "@/components/decision/AgentInsights";
-import { SubagentViews } from "@/components/decision/SubagentViews";
-import { FinalDecision } from "@/components/decision/FinalDecision";
-import { analyze, AnalysisResult } from "@/lib/decision-engine";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Menu, X } from "lucide-react";
+import { ChatSidebar, type Conversation } from "@/components/chat/ChatSidebar";
+import { ChatMessage, type Message } from "@/components/chat/ChatMessage";
+import { ChatInput } from "@/components/chat/ChatInput";
+import { EmptyState } from "@/components/chat/EmptyState";
+import { analyzeDecision, type AnalysisResponse } from "@/lib/api";
 
-type Stage = "idle" | "data" | "agents" | "subagents" | "decision";
+type Stage = "thinking" | "agents" | "perspectives" | "decision";
 
-const stageOrder: Stage[] = ["data", "agents", "subagents", "decision"];
+interface ConversationState {
+  id: string;
+  title: string;
+  timestamp: Date;
+  messages: Message[];
+}
 
-const Index = () => {
-  const [stage, setStage] = useState<Stage>("idle");
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [activeQuery, setActiveQuery] = useState<string>("");
-
-  const isAnalyzing = stage !== "idle" && stage !== "decision";
-
-  const stageStatus = (s: Stage): "pending" | "loading" | "done" => {
-    if (stage === "idle") return "pending";
-    const currentIdx = stageOrder.indexOf(stage);
-    const targetIdx = stageOrder.indexOf(s);
-    if (targetIdx < currentIdx) return "done";
-    if (targetIdx === currentIdx) return stage === "decision" ? "done" : "loading";
-    return "pending";
-  };
-
-  const handleAnalyze = (query: string) => {
-    setActiveQuery(query);
-    const r = analyze(query);
-    setResult(r);
-    setStage("data");
-    setTimeout(() => setStage("agents"), 1100);
-    setTimeout(() => setStage("subagents"), 2400);
-    setTimeout(() => setStage("decision"), 3700);
-  };
-
-  const showAny = stage !== "idle" && result;
-
-  return (
-    <div className="min-h-screen bg-gradient-subtle">
-      <header className="border-b border-border bg-card/60 backdrop-blur-sm sticky top-0 z-10">
-        <div className="container max-w-7xl py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-primary flex items-center justify-center shadow-glow">
-              <Brain className="w-5 h-5 text-primary-foreground" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-foreground leading-tight">
-                AI Decision Engine
-              </h1>
-              <p className="text-xs text-muted-foreground">
-                Multi-agent reasoning for company decisions
-              </p>
-            </div>
-          </div>
-          <div className="hidden md:flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-            Engine online
-          </div>
-        </div>
-      </header>
-
-      <main className="container max-w-7xl py-8">
-        <div className="grid lg:grid-cols-[360px_1fr] gap-6">
-          <InputPanel onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} />
-
-          <div className="space-y-5 min-w-0">
-            {!showAny && (
-              <div className="rounded-2xl border-2 border-dashed border-border bg-card/40 p-12 text-center">
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-primary flex items-center justify-center shadow-glow mb-4">
-                  <Brain className="w-7 h-7 text-primary-foreground" />
-                </div>
-                <h2 className="text-xl font-semibold text-foreground mb-2">
-                  Ready to reason
-                </h2>
-                <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                  Enter a strategic question on the left. The engine will pull data, consult specialist agents, debate perspectives, and deliver a decision.
-                </p>
-              </div>
-            )}
-
-            {showAny && (
-              <>
-                <div className="rounded-xl bg-card border border-border px-4 py-3 shadow-card animate-fade-in-up">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                    Query
-                  </p>
-                  <p className="text-base font-medium text-foreground">"{activeQuery}"</p>
-                </div>
-
-                <DataRetrieved status={stageStatus("data")} items={result!.data} />
-                <AgentInsights status={stageStatus("agents")} agents={result!.agents} />
-                <SubagentViews status={stageStatus("subagents")} views={result!.subagents} />
-
-                {stage === "decision" && <FinalDecision decision={result!.decision} />}
-              </>
-            )}
-          </div>
-        </div>
-      </main>
-    </div>
-  );
+const STAGE_DELAYS: Record<Stage, number> = {
+  thinking: 0,
+  agents: 600,
+  perspectives: 1400,
+  decision: 2200,
 };
 
-export default Index;
+export default function Index() {
+  const [conversations, setConversations] = useState<ConversationState[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const activeConv = conversations.find((c) => c.id === activeId) ?? null;
+
+  const scrollBottom = () =>
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+
+  const updateMessages = useCallback(
+    (convId: string, updater: (msgs: Message[]) => Message[]) => {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === convId ? { ...c, messages: updater(c.messages) } : c))
+      );
+    },
+    []
+  );
+
+  const handleSubmit = useCallback(async () => {
+    const query = input.trim();
+    if (!query || isLoading) return;
+    setInput("");
+    setIsLoading(true);
+
+    // Create or use existing conversation
+    let convId = activeId;
+    if (!convId) {
+      convId = crypto.randomUUID();
+      const newConv: ConversationState = {
+        id: convId,
+        title: query.slice(0, 50) + (query.length > 50 ? "…" : ""),
+        timestamp: new Date(),
+        messages: [],
+      };
+      setConversations((prev) => [newConv, ...prev]);
+      setActiveId(convId);
+    }
+
+    const userMsgId = crypto.randomUUID();
+    const asstMsgId = crypto.randomUUID();
+
+    // Add user message + loading assistant message
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== convId) return c;
+        return {
+          ...c,
+          messages: [
+            ...c.messages,
+            { id: userMsgId, role: "user" as const, content: query },
+            { id: asstMsgId, role: "assistant" as const, isLoading: true },
+          ],
+        };
+      })
+    );
+    scrollBottom();
+
+    try {
+      const data: AnalysisResponse = await analyzeDecision(query);
+
+      // Replace loading message with real data, then animate stages
+      const animateStage = (stage: Stage) => {
+        setConversations((prev) =>
+          prev.map((c) => {
+            if (c.id !== convId) return c;
+            return {
+              ...c,
+              messages: c.messages.map((m) =>
+                m.id === asstMsgId
+                  ? { ...m, isLoading: false, data, stage }
+                  : m
+              ),
+            };
+          })
+        );
+        scrollBottom();
+      };
+
+      const stages: Stage[] = ["agents", "perspectives", "decision"];
+      stages.forEach((s) => setTimeout(() => animateStage(s), STAGE_DELAYS[s]));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      updateMessages(convId, (msgs) =>
+        msgs.map((m) =>
+          m.id === asstMsgId
+            ? { ...m, isLoading: false, error: `Analysis failed: ${msg}` }
+            : m
+        )
+      );
+    } finally {
+      setIsLoading(false);
+      scrollBottom();
+    }
+  }, [input, isLoading, activeId, updateMessages]);
+
+  const handleNewChat = () => {
+    setActiveId(null);
+    setInput("");
+  };
+
+  const handleSelectConv = (id: string) => {
+    setActiveId(id);
+    scrollBottom();
+  };
+
+  const handleDeleteConv = (id: string) => {
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (activeId === id) setActiveId(null);
+  };
+
+  const sidebarConvs: Conversation[] = conversations.map((c) => ({
+    id: c.id,
+    title: c.title,
+    timestamp: c.timestamp,
+  }));
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-background">
+      {/* Sidebar */}
+      {sidebarOpen && (
+        <ChatSidebar
+          conversations={sidebarConvs}
+          activeId={activeId}
+          onSelect={handleSelectConv}
+          onNew={handleNewChat}
+          onDelete={handleDeleteConv}
+        />
+      )}
+
+      {/* Main chat area */}
+      <div className="flex flex-col flex-1 min-w-0 h-full">
+        {/* Header */}
+        <header className="flex items-center gap-3 px-4 py-3 border-b border-border bg-card/70 backdrop-blur-sm shrink-0">
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            className="p-1.5 rounded-lg hover:bg-accent transition-colors text-muted-foreground"
+          >
+            {sidebarOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+          </button>
+          <p className="text-sm font-semibold text-foreground truncate">
+            {activeConv ? activeConv.title : "AI Boss Decision Engine"}
+          </p>
+          <div className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+            Engine online
+          </div>
+        </header>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto">
+          {!activeConv || activeConv.messages.length === 0 ? (
+            <EmptyState onSample={(q) => { setInput(q); }} />
+          ) : (
+            <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+              {activeConv.messages.map((msg) => (
+                <ChatMessage key={msg.id} message={msg} />
+              ))}
+              <div ref={bottomRef} />
+            </div>
+          )}
+        </div>
+
+        {/* Input area */}
+        <div className="shrink-0 px-4 pb-4 pt-2 bg-background/80 backdrop-blur-sm border-t border-border">
+          <div className="max-w-3xl mx-auto">
+            <ChatInput
+              value={input}
+              onChange={setInput}
+              onSubmit={handleSubmit}
+              isLoading={isLoading}
+            />
+            <p className="text-center text-xs text-muted-foreground mt-2">
+              Multi-agent reasoning • HR · Legal · Sales · Finance · Marketing · Supply Chain
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

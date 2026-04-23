@@ -1,208 +1,172 @@
 """
-Manager Agent - Orchestrates all domain agents and synthesizes final decision.
-Marcus's responsibility (subagent personas: conservative vs aggressive).
+Manager Agent — synthesizes all domain agent insights into a final decision
+using LLM-powered conservative / aggressive perspective reasoning.
 """
+import json
+import asyncio
 from typing import Dict, List, Any
 from .base_agent import AgentInsight
+from .llm_client import llm_json
+
+SYNTHESIS_SYSTEM = """You are the Manager Agent of an AI business decision engine.
+You receive structured insights from specialist agents (HR, Sales, Legal, Finance, Marketing,
+Supply Chain) and must synthesize them into a balanced executive decision.
+
+Return ONLY valid JSON with no extra text:
+{
+  "conservative": {
+    "recommendation": "short headline recommendation (≤10 words)",
+    "reasoning": "2-3 sentence rationale emphasizing risk mitigation and legal compliance"
+  },
+  "aggressive": {
+    "recommendation": "short headline recommendation (≤10 words)",
+    "reasoning": "2-3 sentence rationale emphasizing speed, cost-cutting, opportunity capture"
+  },
+  "final_decision": {
+    "verdict": "CLEAR ACTION HEADLINE IN CAPS (≤8 words)",
+    "reasoning": "2-3 sentence rationale for the final balanced decision",
+    "risk_level": "Low or Medium or High",
+    "confidence_score": 78
+  }
+}
+Weigh all agent inputs. Prefer conservative when legal/compliance risks are high.
+"""
 
 
 class ManagerAgent:
-    """
-    Manager agent that:
-    1. Orchestrates all domain agents (HR, Sales, Legal, Finance, Marketing, Supply Chain)
-    2. Aggregates their insights
-    3. Applies decision-making persona (conservative vs aggressive)
-    4. Produces final recommendation with rationale
-    """
-    
-    def __init__(self, agents: List[Any], llm=None):
-        """
-        Initialize manager with domain agents.
-        
-        Args:
-            agents: List of domain agent instances (HRAgent, SalesAgent, etc.)
-            llm: LangChain LLM for synthesis (optional)
-        """
-        self.agents = agents
-        self.llm = llm
-    
+    """Orchestrates domain agents and synthesizes the final decision via LLM."""
+
+    def __init__(self, db_service):
+        self.db = db_service
+        self._agent_registry = self._build_registry()
+
+    def _build_registry(self) -> dict:
+        from .hr_agent import HRAgent
+        from .sales_agent import SalesAgent
+        from .legal_agent import LegalAgent
+        from .finance_agent import FinanceAgent
+        from .marketing_agent import MarketingAgent
+        from .supply_chain_agent import SupplyChainAgent
+        return {
+            "hr": HRAgent(self.db),
+            "sales": SalesAgent(self.db),
+            "legal": LegalAgent(self.db),
+            "finance": FinanceAgent(self.db),
+            "marketing": MarketingAgent(self.db),
+            "supply_chain": SupplyChainAgent(self.db),
+        }
+
     async def orchestrate(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Orchestrate all agents and collect their insights.
-        
-        Args:
-            query: User's decision query
-            context: Additional context (target_type, target_id, etc.)
-        
-        Returns:
-            Dict with agent_insights, conservative_view, aggressive_view, final_decision
+        Run selected agents in parallel, then synthesize with LLM.
+        context must include 'agents' list from intent detector.
         """
-        
-        # Run all agents in parallel (or sequentially for now)
-        agent_insights = []
-        for agent in self.agents:
-            insight = await agent.run(query, context)
-            agent_insights.append(insight)
-        
-        # Synthesize decision with different personas
-        conservative_view = self._generate_conservative_view(agent_insights, query)
-        aggressive_view = self._generate_aggressive_view(agent_insights, query)
-        
-        # Final decision (balanced by default, TODO: make persona configurable)
-        final_decision = self._synthesize_decision(
-            agent_insights, 
-            conservative_view, 
-            aggressive_view,
-            persona='conservative'  # or 'balanced', 'aggressive'
-        )
-        
-        return {
-            'agent_insights': [insight.dict() for insight in agent_insights],
-            'conservative_view': conservative_view,
-            'aggressive_view': aggressive_view,
-            'final_decision': final_decision
+        agent_names: List[str] = context.get("agents", list(self._agent_registry.keys()))
+
+        # Run selected agents concurrently
+        tasks = {
+            name: self._agent_registry[name].run(query, context)
+            for name in agent_names
+            if name in self._agent_registry
         }
-    
-    def _generate_conservative_view(self, insights: List[AgentInsight], query: str) -> str:
-        """
-        Generate conservative decision perspective.
-        
-        Conservative stance prioritizes:
-        - Risk mitigation
-        - Cost of action vs inaction
-        - Legal compliance
-        - Preserving optionality
-        
-        TODO (Marcus): Implement LLM-powered conservative reasoning
-        """
-        
-        # Extract key risks from all agents
-        all_risks = []
-        for insight in insights:
-            all_risks.extend(insight.risks)
-        
-        # Rule-based conservative view (TODO: Replace with LLM)
-        conservative = "Conservative perspective: "
-        
-        if "PIP not initiated" in str(all_risks):
-            conservative += "Legal risk too high without PIP completion. "
-        
-        if "replacement cost" in query.lower() or "termination" in query.lower():
-            conservative += "Replacement cost and ramp time outweigh short-term savings. "
-        
-        conservative += "Recommend cautious approach with clear documentation and exit criteria."
-        
-        return conservative
-    
-    def _generate_aggressive_view(self, insights: List[AgentInsight], query: str) -> str:
-        """
-        Generate aggressive decision perspective.
-        
-        Aggressive stance prioritizes:
-        - Speed of action
-        - Cutting losses quickly
-        - Team morale impact
-        - Opportunity cost
-        
-        TODO (Marcus): Implement LLM-powered aggressive reasoning
-        """
-        
-        # Extract key findings from all agents
-        all_findings = []
-        for insight in insights:
-            all_findings.extend(insight.findings)
-        
-        # Rule-based aggressive view (TODO: Replace with LLM)
-        aggressive = "Aggressive perspective: "
-        
-        if "underperformance" in str(all_findings).lower():
-            aggressive += "Sustained underperformance documented across multiple quarters. "
-        
-        if "revenue" in str(all_findings).lower() and "declining" in str(all_findings).lower():
-            aggressive += "Poor performance hurts team morale and revenue. "
-        
-        aggressive += "Recommend decisive action to address performance issue promptly."
-        
-        return aggressive
-    
-    def _synthesize_decision(
-        self, 
-        insights: List[AgentInsight],
-        conservative_view: str,
-        aggressive_view: str,
-        persona: str = 'balanced'
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        agent_insights: List[AgentInsight] = [
+            r for r in results if isinstance(r, AgentInsight)
+        ]
+
+        if not agent_insights:
+            return self._empty_result(query)
+
+        synthesis = await self._synthesize_with_llm(agent_insights, query)
+
+        return {
+            "agent_insights": [i.model_dump() for i in agent_insights],
+            "conservative_view": synthesis["conservative"],
+            "aggressive_view": synthesis["aggressive"],
+            "final_decision": synthesis["final_decision"],
+        }
+
+    async def _synthesize_with_llm(
+        self, insights: List[AgentInsight], query: str
     ) -> Dict[str, Any]:
-        """
-        Synthesize final decision based on agent insights and persona.
-        
-        TODO (Marcus): Implement LLM-powered synthesis with persona weighting
-        - Conservative: prioritize legal/risk agents
-        - Aggressive: prioritize financial/performance agents
-        - Balanced: equal weighting
-        
-        Args:
-            insights: All agent insights
-            conservative_view: Conservative perspective
-            aggressive_view: Aggressive perspective
-            persona: 'conservative', 'balanced', or 'aggressive'
-        
-        Returns:
-            Final decision dict
-        """
-        
-        # Extract agent recommendations
-        recommendations = {insight.agent_name: insight.recommendation for insight in insights}
-        
-        # Determine risk level (highest risk from any agent)
-        risk_levels = {'Low': 1, 'Medium': 2, 'High': 3}
-        max_risk = 'Low'
-        
-        # Calculate confidence (average of all agents)
-        avg_confidence = sum(insight.confidence for insight in insights) / len(insights) if insights else 0.0
-        
-        # Generate rationale by combining agent insights
-        rationale = "Multi-agent analysis:\n\n"
-        for insight in insights:
-            rationale += f"**{insight.agent_name} Agent:** {' '.join(insight.findings[:2])}\n"
-            if insight.risks:
-                rationale += f"Risks: {insight.risks[0]}\n"
-            rationale += f"Recommendation: {insight.recommendation}\n\n"
-        
-        # Final recommendation based on persona
-        if persona == 'conservative':
-            final_recommendation = self._extract_conservative_recommendation(insights, conservative_view)
-            rationale += f"\n**Manager Decision (Conservative):** {conservative_view}"
-        elif persona == 'aggressive':
-            final_recommendation = self._extract_aggressive_recommendation(insights, aggressive_view)
-            rationale += f"\n**Manager Decision (Aggressive):** {aggressive_view}"
-        else:  # balanced
-            final_recommendation = self._extract_balanced_recommendation(insights)
-            rationale += f"\n**Manager Decision (Balanced):** Weighing both perspectives."
-        
+        summary = "\n\n".join(
+            f"[{i.agent_name} Agent]\n"
+            f"Findings: {'; '.join(i.findings[:3])}\n"
+            f"Risks: {'; '.join(i.risks[:2])}\n"
+            f"Recommendation: {i.recommendation}\n"
+            f"Confidence: {i.confidence:.0%}"
+            for i in insights
+        )
+        user_msg = f"Query: {query}\n\nAgent Insights:\n{summary}"
+
+        try:
+            result = await llm_json(SYNTHESIS_SYSTEM, user_msg, temperature=0.3)
+            result.setdefault("conservative", {
+                "recommendation": "Proceed cautiously",
+                "reasoning": "Multiple risks identified. Take a phased approach."
+            })
+            result.setdefault("aggressive", {
+                "recommendation": "Act decisively",
+                "reasoning": "Delay carries opportunity cost. Move now with safeguards."
+            })
+            fd = result.setdefault("final_decision", {})
+            fd.setdefault("verdict", "PROCEED WITH CAUTION")
+            fd.setdefault("reasoning", "Balanced analysis suggests a measured approach.")
+            fd.setdefault("risk_level", "Medium")
+            avg_conf = sum(i.confidence for i in insights) / len(insights)
+            fd.setdefault("confidence_score", round(avg_conf * 100))
+            return result
+        except Exception:
+            return self._rule_based_synthesis(insights)
+
+    def _rule_based_synthesis(self, insights: List[AgentInsight]) -> Dict[str, Any]:
+        avg_conf = sum(i.confidence for i in insights) / len(insights)
+        all_risks = [r for i in insights for r in i.risks]
+        all_recs = [i.recommendation for i in insights]
         return {
-            'recommendation': final_recommendation,
-            'risk_level': 'Medium',  # TODO: Calculate from agent risks
-            'confidence_score': round(avg_confidence * 100, 2),
-            'rationale': rationale,
-            'manager_persona': persona
+            "conservative": {
+                "recommendation": "Proceed cautiously with documented safeguards",
+                "reasoning": (
+                    "Multiple agent risks flagged. "
+                    "Conservative approach protects against legal and financial exposure. "
+                    "Implement protective measures before acting."
+                ),
+            },
+            "aggressive": {
+                "recommendation": "Act decisively to capture opportunity",
+                "reasoning": (
+                    "Agent analysis supports action. "
+                    "Delay creates opportunity cost. "
+                    "Accept calculated risk for faster outcome."
+                ),
+            },
+            "final_decision": {
+                "verdict": "PROCEED WITH STRUCTURED PLAN",
+                "reasoning": (
+                    "Agent consensus points toward action with safeguards. "
+                    f"Key risks: {'; '.join(all_risks[:2]) if all_risks else 'none critical'}. "
+                    "Execute with clear milestones and exit criteria."
+                ),
+                "risk_level": "High" if len(all_risks) > 4 else "Medium",
+                "confidence_score": round(avg_conf * 100),
+            },
         }
-    
-    def _extract_conservative_recommendation(self, insights: List[AgentInsight], view: str) -> str:
-        """Extract key recommendation from conservative perspective."""
-        # Simple heuristic (TODO: LLM-based extraction)
-        if "PIP" in view:
-            return "DO NOT TERMINATE - Initiate 60-day PIP with measurable criteria"
-        return "Proceed with caution - implement protective measures first"
-    
-    def _extract_aggressive_recommendation(self, insights: List[AgentInsight], view: str) -> str:
-        """Extract key recommendation from aggressive perspective."""
-        # Simple heuristic (TODO: LLM-based extraction)
-        if "underperformance" in view.lower():
-            return "TERMINATE - Performance issues documented, action justified"
-        return "Proceed decisively - delay creates opportunity cost"
-    
-    def _extract_balanced_recommendation(self, insights: List[AgentInsight]) -> str:
-        """Extract balanced recommendation from agent consensus."""
-        # Count agent recommendations leaning toward action vs caution
-        # TODO: Implement proper consensus logic
-        return "Proceed with phased approach - validate before full commitment"
+
+    def _empty_result(self, query: str) -> Dict[str, Any]:
+        return {
+            "agent_insights": [],
+            "conservative_view": {
+                "recommendation": "Gather more information",
+                "reasoning": "Insufficient data to make a recommendation.",
+            },
+            "aggressive_view": {
+                "recommendation": "Defer decision",
+                "reasoning": "No agent data available to support action.",
+            },
+            "final_decision": {
+                "verdict": "INSUFFICIENT DATA",
+                "reasoning": "No agent insights were returned. Please refine your query.",
+                "risk_level": "High",
+                "confidence_score": 0,
+            },
+        }

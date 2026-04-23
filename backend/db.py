@@ -18,72 +18,129 @@ def get_supabase_client() -> Client:
 
 class DatabaseService:
     """Service class for database operations."""
-    
+
     def __init__(self):
         self.client = get_supabase_client()
-    
+
+    # ── Employee ──────────────────────────────────────────────────────────
+
     async def get_employee(self, employee_id: int):
-        """Get employee with related records."""
         response = self.client.table('employee') \
             .select('*, department:dept_id(*)') \
             .eq('employee_id', employee_id) \
             .single() \
             .execute()
         return response.data
-    
+
+    async def get_all_employees(self):
+        response = self.client.table('employee') \
+            .select('*, department:dept_id(name)') \
+            .is_('exit_date', 'null') \
+            .execute()
+        return response.data
+
+    # ── HR ────────────────────────────────────────────────────────────────
+
     async def get_employee_hr_records(self, employee_id: int):
-        """Get HR performance records for an employee."""
         response = self.client.table('hr_record') \
             .select('*') \
             .eq('employee_id', employee_id) \
             .order('period', desc=True) \
             .execute()
         return response.data
-    
+
+    # ── Sales ─────────────────────────────────────────────────────────────
+
     async def get_employee_sales_records(self, employee_id: int, period: str = None):
-        """Get sales records for an employee."""
         query = self.client.table('sales_record') \
             .select('*') \
             .eq('employee_id', employee_id)
-        
         if period:
             query = query.eq('period', period)
-        
         response = query.order('period', desc=True).execute()
         return response.data
-    
+
+    async def get_dept_sales_records(self, dept_id: int, period: str = None):
+        query = self.client.table('sales_record').select('*').eq('dept_id', dept_id)
+        if period:
+            query = query.eq('period', period)
+        return query.execute().data
+
+    # ── Legal ─────────────────────────────────────────────────────────────
+
     async def get_legal_policies(self, category: str = None):
-        """Get legal policies, optionally filtered by category."""
-        query = self.client.table('legal_record').select('*')
-        
+        """Fetch from legal_policy table (renamed from legal_record)."""
+        query = self.client.table('legal_policy').select('*')
         if category:
             query = query.eq('policy_category', category)
-        
-        response = query.execute()
-        return response.data
-    
+        return query.execute().data
+
+    async def get_legal_contracts(self, employee_id: int = None):
+        query = self.client.table('legal_contract').select('*')
+        if employee_id:
+            query = query.eq('employee_id', employee_id)
+        return query.execute().data
+
+    async def get_legal_cases(self, employee_id: int = None):
+        query = self.client.table('legal_cases').select('*')
+        if employee_id:
+            query = query.eq('employee_id', employee_id)
+        return query.execute().data
+
+    # ── Finance ───────────────────────────────────────────────────────────
+
+    async def get_finance_records(self, employee_id: int = None, dept_id: int = None,
+                                  period: str = None):
+        query = self.client.table('finance_record').select('*')
+        if employee_id:
+            query = query.eq('employee_id', employee_id)
+        if dept_id:
+            query = query.eq('dept_id', dept_id)
+        if period:
+            query = query.eq('period', period)
+        return query.order('period', desc=True).execute().data
+
+    # ── Marketing ─────────────────────────────────────────────────────────
+
+    async def get_marketing_records(self, period: str = None, campaign_name: str = None):
+        query = self.client.table('marketing_record').select('*')
+        if period:
+            query = query.eq('period', period)
+        if campaign_name:
+            query = query.ilike('campaign_name', f'%{campaign_name}%')
+        return query.order('period', desc=True).execute().data
+
+    # ── Supply Chain ──────────────────────────────────────────────────────
+
+    async def get_supply_records(self, period: str = None, item_name: str = None):
+        query = self.client.table('supply_record').select('*')
+        if period:
+            query = query.eq('period', period)
+        if item_name:
+            query = query.ilike('item_name', f'%{item_name}%')
+        return query.execute().data
+
+    # ── Decision Case ─────────────────────────────────────────────────────
+
     async def get_case_evidence(self, case_id: int):
-        """Get all evidence linked to a decision case."""
         response = self.client.table('case_evidence') \
             .select('*') \
             .eq('case_id', case_id) \
             .order('relevance_score', desc=True) \
             .execute()
         return response.data
-    
+
     async def get_decision_output(self, case_id: int):
-        """Get decision output for a case."""
         response = self.client.table('decision_output') \
             .select('*') \
             .eq('case_id', case_id) \
             .single() \
             .execute()
         return response.data
-    
-    async def create_decision_case(self, question: str, context: str = None, 
-                                  target_type: str = None, target_id: int = None,
-                                  submitted_by: str = None):
-        """Create a new decision case."""
+
+    async def create_decision_case(self, question: str, context: str = None,
+                                   target_type: str = None, target_id: int = None,
+                                   submitted_by: str = None):
         response = self.client.table('decision_case') \
             .insert({
                 'question': question,
@@ -95,11 +152,10 @@ class DatabaseService:
             }) \
             .execute()
         return response.data[0]
-    
-    async def save_case_evidence(self, case_id: int, source_table: str, 
-                                record_id: int, relevance_score: float,
-                                retrieval_method: str = 'sql_query', notes: str = None):
-        """Save evidence linking for a case."""
+
+    async def save_case_evidence(self, case_id: int, source_table: str,
+                                 record_id: int, relevance_score: float,
+                                 retrieval_method: str = 'sql_query', notes: str = None):
         response = self.client.table('case_evidence') \
             .insert({
                 'case_id': case_id,
@@ -111,14 +167,13 @@ class DatabaseService:
             }) \
             .execute()
         return response.data[0]
-    
+
     async def save_decision_output(self, case_id: int, recommendation: str,
-                                  risk_level: str, confidence_score: float,
-                                  rationale: str, conservative_view: str = None,
-                                  aggressive_view: str = None, 
-                                  manager_persona: str = 'balanced',
-                                  ai_justification: str = None):
-        """Save final decision output."""
+                                   risk_level: str, confidence_score: float,
+                                   rationale: str, conservative_view: str = None,
+                                   aggressive_view: str = None,
+                                   manager_persona: str = 'balanced',
+                                   ai_justification: str = None):
         response = self.client.table('decision_output') \
             .insert({
                 'case_id': case_id,
@@ -132,11 +187,10 @@ class DatabaseService:
                 'ai_justification': ai_justification
             }) \
             .execute()
-        
-        # Update case status to completed
+
         self.client.table('decision_case') \
             .update({'status': 'completed'}) \
             .eq('case_id', case_id) \
             .execute()
-        
+
         return response.data[0]
