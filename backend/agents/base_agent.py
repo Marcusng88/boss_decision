@@ -10,7 +10,7 @@ from typing import Dict, List, Any
 
 from pydantic import BaseModel
 
-from services.llm_client import ZhipuLLMClient
+from services.llm_client import UnifiedLLMClient
 
 
 class AgentInsight(BaseModel):
@@ -41,7 +41,7 @@ class BaseAgent(ABC):
         self.llm = llm
         self.agent_name = self.__class__.__name__.replace('Agent', '')
         # Shared LLM client for all sub-agents
-        self._llm_client: ZhipuLLMClient | None = ZhipuLLMClient.from_settings()
+        self._llm_client: UnifiedLLMClient | None = UnifiedLLMClient.from_settings()
 
     @abstractmethod
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -83,7 +83,7 @@ class BaseAgent(ABC):
         """
         Shared LLM-powered analysis helper for all sub-agents.
 
-        Sends the query + evidence summary to the shared GLM client and parses
+        Sends the query + evidence summary to the shared Gemini client and parses
         structured JSON findings/risks/recommendation.  Falls back gracefully to
         `fallback_insight` on any LLM or parse error.
 

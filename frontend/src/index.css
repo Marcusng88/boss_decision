@@ -138,4 +138,8 @@ All colors MUST be HSL.
     font-family: 'Manrope', 'Space Grotesk', sans-serif;
     letter-spacing: -0.015em;
   }
+
+  .prose :last-child {
+    margin-bottom: 0 !important;
+  }
 }

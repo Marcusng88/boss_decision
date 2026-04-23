@@ -2,7 +2,7 @@
 Document ingestion service for manager routing context.
 
 Primary path: Gemini multimodal (gemini-2.5-flash-lite)
-Fallbacks: ZHIPU text -> heuristic classification
+Exclusive analysis engine.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from typing import Any, Dict
 
 from dotenv import load_dotenv
 
-from services.llm_client import ZhipuLLMClient
+from services.llm_client import UnifiedLLMClient
 
 try:
     from google import genai as google_genai
@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - optional runtime dependency
 
 @dataclass
 class DocumentServiceSettings:
-    llm_model: str = "glm-4-flash"
+    llm_model: str = "gemini-2.5-flash-lite"
     gemini_model: str = "gemini-2.5-flash-lite"
     llm_temperature: float = 0.2
     google_api_key: str | None = None
@@ -48,7 +48,7 @@ def load_document_settings() -> DocumentServiceSettings:
         temp = 0.2
 
     return DocumentServiceSettings(
-        llm_model=os.getenv("LLM_MODEL", "glm-4-flash"),
+        llm_model=os.getenv("LLM_MODEL", "gemini-2.5-flash-lite"),
         gemini_model=os.getenv("DOCUMENT_GEMINI_MODEL", "gemini-2.5-flash-lite"),
         llm_temperature=temp,
         google_api_key=os.getenv("GOOGLE_API_KEY"),
@@ -66,7 +66,7 @@ class DocumentIngestor:
 
     def __init__(self):
         self.settings = load_document_settings()
-        self.llm_client = ZhipuLLMClient.from_settings()
+        self.llm_client = UnifiedLLMClient.from_settings()
         self.gemini_client = None
         if google_genai is not None and self.settings.google_api_key:
             try:
@@ -270,7 +270,7 @@ Output JSON schema:
         parsed["model_used"] = self.settings.gemini_model
         return parsed
 
-    async def _analyze_with_zhipu(
+    async def _analyze_with_unified_llm(
         self,
         *,
         metadata: Dict[str, Any],
@@ -279,7 +279,7 @@ Output JSON schema:
         user_prompt: str,
     ) -> Dict[str, Any]:
         if not self.llm_client:
-            raise RuntimeError("ZHIPU client unavailable")
+            raise RuntimeError("LLM client unavailable")
 
         parsed, model_used = await self.llm_client.acomplete_json(
             system_prompt=system_prompt,
@@ -288,7 +288,7 @@ Output JSON schema:
             max_tokens=700,
             model=self.settings.llm_model,
         )
-        parsed["provider"] = "zhipu"
+        parsed["provider"] = "unified_llm"
         parsed["model_used"] = model_used
         if not parsed.get("department"):
             parsed["department"] = default_department
@@ -326,7 +326,7 @@ Output JSON schema:
                 error_chain.append(f"gemini:{self._compact_error(exc)}")
 
         try:
-            parsed = await self._analyze_with_zhipu(
+            parsed = await self._analyze_with_unified_llm(
                 metadata=metadata,
                 default_department=default_department,
                 system_prompt=system_prompt,
@@ -337,7 +337,7 @@ Output JSON schema:
                 parsed["department"] = default_department
             return parsed
         except Exception as exc:
-            error_chain.append(f"zhipu:{self._compact_error(exc)}")
+            error_chain.append(f"unified_llm:{self._compact_error(exc)}")
 
         return self._heuristic_payload(
             metadata=metadata,

@@ -3,6 +3,8 @@ import { Brain, AlertTriangle } from "lucide-react";
 import { InputPanel } from "@/components/decision/InputPanel";
 import { FinalDecision } from "@/components/decision/FinalDecision";
 import { analyzeDecision, AnalysisResult, ChatMessage } from "@/lib/decision-engine";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const Index = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -151,7 +153,9 @@ const Index = () => {
                     {shownChat.map((msg) => (
                       <div key={msg.id} className={`max-w-[80%] rounded-2xl px-4 py-3 text-left ${bubbleClass(msg.actor)}`}>
                         <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75 mb-1">{msg.label}</p>
-                        <p className="text-sm leading-relaxed">{msg.text}</p>
+                        <div className={`prose prose-sm max-w-none leading-relaxed ${msg.actor === 'user' ? 'prose-invert text-primary-foreground' : 'dark:prose-invert text-foreground'}`}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                        </div>
                       </div>
                     ))}
                     {isAnalyzing && (

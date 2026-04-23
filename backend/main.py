@@ -14,7 +14,7 @@ import uvicorn
 from config import get_settings
 from services.local_knowledge_service import LocalKnowledgeService
 from services.document_service import DocumentIngestor
-from services.llm_client import ZhipuLLMClient
+from services.llm_client import UnifiedLLMClient
 from agents import (
     HRAgent,
     SalesAgent,
@@ -126,7 +126,7 @@ async def health_check():
 @app.get("/api/health/llm")
 async def llm_health_check():
     """Check LLM connectivity and model availability without exposing secrets."""
-    client = ZhipuLLMClient.from_settings()
+    client = UnifiedLLMClient.from_settings()
     if client is None:
         raise HTTPException(status_code=503, detail="LLM not configured (missing API key)")
 
@@ -140,7 +140,7 @@ async def llm_health_check():
         return {
             "status": "healthy",
             "llm_model": client.model,
-            "llm_endpoint_candidates": client.endpoint_candidates,
+            "llm_endpoint": client.base_url,
             "llm_response": (response.text or "")[:40],
         }
     except Exception as exc:
@@ -149,7 +149,7 @@ async def llm_health_check():
             detail={
                 "status": "unhealthy",
                 "llm_model": client.model,
-                "llm_endpoint_candidates": client.endpoint_candidates,
+                "llm_endpoint": client.base_url,
                 "error": str(exc),
             },
         )

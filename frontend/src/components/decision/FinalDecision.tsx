@@ -1,5 +1,7 @@
 import { CheckCircle2, AlertTriangle, Gauge } from "lucide-react";
 import { Decision } from "@/lib/decision-engine";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Props {
   decision: Decision;
@@ -28,9 +30,9 @@ export const FinalDecision = ({ decision }: Props) => {
           {decision.verdict}
         </h2>
 
-        <p className="text-base md:text-lg opacity-95 mb-6 max-w-2xl leading-relaxed">
-          {decision.reasoning}
-        </p>
+        <div className="prose dark:prose-invert max-w-2xl text-primary-foreground/90 mb-6 leading-relaxed">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{decision.reasoning}</ReactMarkdown>
+        </div>
 
         <div className="grid sm:grid-cols-2 gap-3">
           <div className={`rounded-xl border bg-background/95 p-4 ${riskColor.replace("text-", "").split(" ")[0]}`}>

@@ -1,6 +1,8 @@
 import { Brain, Shield, Flame } from "lucide-react";
 import { StageCard } from "./StageCard";
 import { SubagentView } from "@/lib/decision-engine";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Props {
   status: "pending" | "loading" | "done";
@@ -51,7 +53,9 @@ export const SubagentViews = ({ status, views }: Props) => {
                 </span>
               </div>
               <p className="text-base font-semibold text-foreground mb-1">{v.recommendation}</p>
-              <p className="text-sm text-muted-foreground leading-relaxed">{v.reasoning}</p>
+              <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground leading-relaxed">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{v.reasoning}</ReactMarkdown>
+              </div>
             </div>
           );
         })}

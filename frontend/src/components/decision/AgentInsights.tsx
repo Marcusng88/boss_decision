@@ -1,6 +1,8 @@
 import { Bot } from "lucide-react";
 import { StageCard } from "./StageCard";
 import { AgentInsight } from "@/lib/decision-engine";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Props {
   status: "pending" | "loading" | "done";
@@ -27,7 +29,9 @@ export const AgentInsights = ({ status, agents }: Props) => {
               <span className="text-lg">{a.emoji}</span>
               <span className="text-sm font-semibold text-foreground">{a.name}</span>
             </div>
-            <p className="text-sm text-muted-foreground leading-relaxed">{a.insight}</p>
+            <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground leading-relaxed">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{a.insight}</ReactMarkdown>
+            </div>
           </div>
         ))}
       </div>

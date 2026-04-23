@@ -7,7 +7,7 @@ import json
 from typing import Any, Dict, List
 
 from .base_agent import AgentInsight
-from services.llm_client import ZhipuLLMClient
+from services.llm_client import UnifiedLLMClient
 
 
 class ManagerAgent:
@@ -17,8 +17,8 @@ class ManagerAgent:
         self.agents = agents
         self.llm = llm
         self.agent_registry = self._build_agent_registry(agents)
-        self.router_client = ZhipuLLMClient.from_settings()
-        self.router_init_error = None if self.router_client else "ZHIPU_API_KEY not configured"
+        self.router_client = UnifiedLLMClient.from_settings()
+        self.router_init_error = None if self.router_client else "API key not configured"
         self.supported_departments = [
             "hr",
             "sales",
@@ -104,7 +104,7 @@ class ManagerAgent:
         return list(dict.fromkeys(selected))
 
     async def route_agents(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Select target departments dynamically with ZHIPU LLM."""
+        """Select target departments dynamically with LLM."""
         doc_summary = context.get("document_summary")
         doc_department = context.get("document_department")
         allowed = ", ".join(self.supported_departments)
@@ -220,7 +220,7 @@ Output JSON schema:
                 agent_name=label,
                 findings=[f"{label} agent selected but LLM client is unavailable."],
                 risks=["Sub-agent analysis is degraded due to missing LLM configuration."],
-                recommendation=f"Configure ZHIPU_API_KEY to enable dynamic {label} analysis.",
+                recommendation=f"Configure an API key to enable dynamic {label} analysis.",
                 confidence=0.3,
                 evidence_used=[{"source": "manager_router", "detail": "llm_not_configured"}],
             )
@@ -262,7 +262,7 @@ Return JSON only:
                 confidence=max(0.0, min(confidence, 1.0)),
                 evidence_used=[
                     {
-                        "source": "zhipu_llm",
+                        "source": "unified_llm",
                         "detail": f"dynamic_sub_agent_{department}",
                     }
                 ],
