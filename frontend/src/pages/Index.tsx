@@ -1,46 +1,86 @@
-import { useState } from "react";
-import { Brain } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Brain, AlertTriangle } from "lucide-react";
 import { InputPanel } from "@/components/decision/InputPanel";
-import { DataRetrieved } from "@/components/decision/DataRetrieved";
-import { AgentInsights } from "@/components/decision/AgentInsights";
-import { SubagentViews } from "@/components/decision/SubagentViews";
 import { FinalDecision } from "@/components/decision/FinalDecision";
-import { analyze, AnalysisResult } from "@/lib/decision-engine";
-
-type Stage = "idle" | "data" | "agents" | "subagents" | "decision";
-
-const stageOrder: Stage[] = ["data", "agents", "subagents", "decision"];
+import { analyzeDecision, AnalysisResult, ChatMessage } from "@/lib/decision-engine";
 
 const Index = () => {
-  const [stage, setStage] = useState<Stage>("idle");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [activeQuery, setActiveQuery] = useState<string>("");
+  const [error, setError] = useState<string>("");
+  const [visibleMessages, setVisibleMessages] = useState(0);
 
-  const isAnalyzing = stage !== "idle" && stage !== "decision";
+  const chatMessages: ChatMessage[] = result?.chat || [];
 
-  const stageStatus = (s: Stage): "pending" | "loading" | "done" => {
-    if (stage === "idle") return "pending";
-    const currentIdx = stageOrder.indexOf(stage);
-    const targetIdx = stageOrder.indexOf(s);
-    if (targetIdx < currentIdx) return "done";
-    if (targetIdx === currentIdx) return stage === "decision" ? "done" : "loading";
-    return "pending";
+  useEffect(() => {
+    if (!chatMessages.length) {
+      setVisibleMessages(0);
+      return;
+    }
+
+    setVisibleMessages(0);
+    const timer = setInterval(() => {
+      setVisibleMessages((prev) => {
+        if (prev >= chatMessages.length) {
+          clearInterval(timer);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 260);
+
+    return () => clearInterval(timer);
+  }, [result, chatMessages.length]);
+
+  const handleAnalyze = async (payload: {
+    query: string;
+    context?: string;
+    targetType?: string;
+    targetId?: number;
+    allowMockFallback: boolean;
+    document?: File;
+  }) => {
+    setIsAnalyzing(true);
+    setError("");
+    setActiveQuery(payload.query);
+    try {
+      const analyzed = await analyzeDecision(payload.query, {
+        context: payload.context,
+        targetType: payload.targetType,
+        targetId: payload.targetId,
+        allowMockFallback: payload.allowMockFallback,
+        document: payload.document,
+      });
+      setResult(analyzed);
+    } catch (e) {
+      setResult(null);
+      setError(e instanceof Error ? e.message : "Analysis failed");
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
-  const handleAnalyze = (query: string) => {
-    setActiveQuery(query);
-    const r = analyze(query);
-    setResult(r);
-    setStage("data");
-    setTimeout(() => setStage("agents"), 1100);
-    setTimeout(() => setStage("subagents"), 2400);
-    setTimeout(() => setStage("decision"), 3700);
-  };
+  const shownChat = useMemo(() => chatMessages.slice(0, visibleMessages), [chatMessages, visibleMessages]);
 
-  const showAny = stage !== "idle" && result;
+  const bubbleClass = (actor: ChatMessage["actor"]) => {
+    switch (actor) {
+      case "user":
+        return "ml-auto bg-primary text-primary-foreground";
+      case "manager_router":
+        return "mr-auto bg-accent text-accent-foreground";
+      case "agent":
+        return "mr-auto bg-card border border-border";
+      case "manager_tldr":
+        return "mr-auto bg-success/15 border border-success/40";
+      default:
+        return "mr-auto bg-warning/15 border border-warning/40";
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-subtle">
+    <div className="min-h-screen bg-gradient-subtle relative overflow-x-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-70 bg-[radial-gradient(circle_at_12%_12%,hsl(195_92%_78%/.35),transparent_35%),radial-gradient(circle_at_90%_18%,hsl(217_91%_64%/.28),transparent_30%),radial-gradient(circle_at_58%_85%,hsl(188_78%_66%/.20),transparent_38%)]" />
       <header className="border-b border-border bg-card/60 backdrop-blur-sm sticky top-0 z-10">
         <div className="container max-w-7xl py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -52,7 +92,7 @@ const Index = () => {
                 AI Decision Engine
               </h1>
               <p className="text-xs text-muted-foreground">
-                Multi-agent reasoning for company decisions
+                #manager-orchestrator · group-chat orchestration view
               </p>
             </div>
           </div>
@@ -63,12 +103,12 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="container max-w-7xl py-8">
+      <main className="container max-w-7xl py-8 relative z-[1]">
         <div className="grid lg:grid-cols-[360px_1fr] gap-6">
           <InputPanel onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} />
 
           <div className="space-y-5 min-w-0">
-            {!showAny && (
+            {!result && !isAnalyzing && !error && (
               <div className="rounded-2xl border-2 border-dashed border-border bg-card/40 p-12 text-center">
                 <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-primary flex items-center justify-center shadow-glow mb-4">
                   <Brain className="w-7 h-7 text-primary-foreground" />
@@ -82,20 +122,48 @@ const Index = () => {
               </div>
             )}
 
-            {showAny && (
+            {error && (
+              <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {error}
+              </div>
+            )}
+
+            {result && (
               <>
                 <div className="rounded-xl bg-card border border-border px-4 py-3 shadow-card animate-fade-in-up">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1 flex items-center justify-between">
                     Query
+                    {result.routing.routeSource === "fallback" && (
+                      <span className="inline-flex items-center gap-1 text-warning">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Backend fallback
+                      </span>
+                    )}
                   </p>
                   <p className="text-base font-medium text-foreground">"{activeQuery}"</p>
                 </div>
 
-                <DataRetrieved status={stageStatus("data")} items={result!.data} />
-                <AgentInsights status={stageStatus("agents")} agents={result!.agents} />
-                <SubagentViews status={stageStatus("subagents")} views={result!.subagents} />
+                <div className="rounded-2xl bg-card border border-border p-4 shadow-card">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                    WhatsApp-style agent room
+                  </p>
+                  <div className="space-y-3 max-h-[480px] overflow-auto pr-1">
+                    {shownChat.map((msg) => (
+                      <div key={msg.id} className={`max-w-[80%] rounded-2xl px-4 py-3 text-left ${bubbleClass(msg.actor)}`}>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75 mb-1">{msg.label}</p>
+                        <p className="text-sm leading-relaxed">{msg.text}</p>
+                      </div>
+                    ))}
+                    {isAnalyzing && (
+                      <div className="mr-auto max-w-[40%] rounded-2xl px-4 py-3 bg-card border border-border">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75 mb-1">System</p>
+                        <p className="text-sm">Typing...</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-                {stage === "decision" && <FinalDecision decision={result!.decision} />}
+                <FinalDecision decision={result.decision} />
               </>
             )}
           </div>

@@ -29,8 +29,11 @@ class Settings(BaseSettings):
     
     # LLM Configuration
     google_api_key: Optional[str] = None
+    zhipu_api_key: Optional[str] = None
+    zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    llm_provider: str = "zhipu"
     openai_api_key: str | None = None
-    llm_model: str = "gemma-4-31b-it"
+    llm_model: str = "glm-4-flash"
     llm_temperature: float = 0.7
     
     # LangChain Configuration
