@@ -400,7 +400,6 @@ class DeepOrchestrator:
                     text = _extract_text_content(getattr(message_chunk, "content", ""))
                     if text:
                         collected += text
-                        yield {"type": "agent_chunk", "persona_id": persona.id, "chunk": text}
                     for tool_chunk in _extract_tool_call_chunks(message_chunk):
                         tool_name = str(tool_chunk.get("name") or tool_chunk.get("tool_name") or "").strip()
                         tool_id = str(tool_chunk.get("id") or "").strip()

@@ -21,14 +21,9 @@ import {
   Store,
   TrendingUp,
   Users,
-  Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import rehypeKatex from "rehype-katex";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -120,6 +115,20 @@ interface TickScoreBreakdown {
   tick: number;
   kpi_shift: number;
   personas: PersonaScoreBreakdown[];
+}
+
+interface TickSnapshot {
+  tick: number;
+  phase: GamePhase;
+  summary: string;
+  kpi: {
+    revenue: number;
+    margin: number;
+    sentiment: number;
+    churn_risk: number;
+  };
+  actions: ActionRecord[];
+  scoreBreakdown: TickScoreBreakdown | null;
 }
 
 interface FinalReport {
@@ -596,10 +605,7 @@ function boardTokenTone(status: AgentStatus): string {
 
 function boardStatusBubble(agent: AgentCard): string {
   if (agent.status === "thinking") return "Thinking...";
-  if (agent.status === "acting") {
-    const latestTool = agent.toolCalls[agent.toolCalls.length - 1] ?? "Executing move";
-    return latestTool.length > 20 ? `${latestTool.slice(0, 20)}...` : latestTool;
-  }
+  if (agent.status === "acting") return "Acting...";
   if (agent.status === "done") return "Done";
   return "Idle";
 }
@@ -894,6 +900,10 @@ export function DeepSimulationSection() {
   const [socialLinks, setSocialLinks] = useState<SocialLink[]>([]);
   const [latestScoreBreakdown, setLatestScoreBreakdown] = useState<TickScoreBreakdown | null>(null);
   const [scoreSeries, setScoreSeries] = useState<ScorePoint[]>([]);
+  const [tickSnapshots, setTickSnapshots] = useState<Record<number, TickSnapshot>>({});
+  const [replayTick, setReplayTick] = useState(0);
+  const [followLive, setFollowLive] = useState(true);
+  const [isReplayPlaying, setIsReplayPlaying] = useState(false);
   const [finalReport, setFinalReport] = useState<FinalReport | null>(null);
   const [showResultCard, setShowResultCard] = useState(false);
   const [showInfoCard, setShowInfoCard] = useState(false);
@@ -905,6 +915,7 @@ export function DeepSimulationSection() {
   const [cameraFollowUntil, setCameraFollowUntil] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
+  const followLiveRef = useRef(true);
   const lastWorldTickRef = useRef(0);
   const timelineRef = useRef<TimelineEvent[]>([]);
   const lastWorldUiTsRef = useRef(0);
@@ -926,6 +937,34 @@ export function DeepSimulationSection() {
       if (shakeTimerRef.current !== null) window.clearTimeout(shakeTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    followLiveRef.current = followLive;
+  }, [followLive]);
+
+  useEffect(() => {
+    if (!isReplayPlaying) return;
+    const replayTicks = Object.keys(tickSnapshots)
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    if (replayTicks.length === 0) return;
+    const maxReplayTick = Math.max(...replayTicks);
+    if (maxReplayTick <= 0) return;
+
+    const timer = window.setInterval(() => {
+      setFollowLive(false);
+      setReplayTick((previousTick) => {
+        const nextTick = previousTick + 1;
+        if (nextTick > maxReplayTick) {
+          setIsReplayPlaying(false);
+          return maxReplayTick;
+        }
+        return nextTick;
+      });
+    }, 900);
+
+    return () => window.clearInterval(timer);
+  }, [isReplayPlaying, tickSnapshots]);
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -951,6 +990,21 @@ export function DeepSimulationSection() {
   }, [agents, boardTiles]);
 
   const progressPct = maxTicks > 0 ? Math.min(100, Math.round((tick / maxTicks) * 100)) : 0;
+  const replayTicks = useMemo(
+    () =>
+      Object.keys(tickSnapshots)
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value)),
+    [tickSnapshots],
+  );
+  const maxReplayTick = replayTicks.length > 0 ? Math.max(...replayTicks) : tick;
+  const activeTick = followLive ? tick : replayTick;
+  const activeSnapshot = tickSnapshots[activeTick];
+  const activePhase = activeSnapshot?.phase ?? currentPhase;
+  const activeKpi = activeSnapshot?.kpi ?? kpi;
+  const activeScoreBreakdown = activeSnapshot?.scoreBreakdown ?? (followLive ? latestScoreBreakdown : null);
+  const activeActions = activeSnapshot?.actions ?? [...pendingActions, ...resolvedActions];
+  const activeSummary = activeSnapshot?.summary || progressSummary;
 
   const pulseTiles = (tileIds: string[]) => {
     const unique = Array.from(new Set(tileIds.filter((id) => boardTilesById.has(id))));
@@ -1000,6 +1054,10 @@ export function DeepSimulationSection() {
     setActiveEvent(null);
     setSocialLinks([]);
     setLatestScoreBreakdown(null);
+    setTickSnapshots({});
+    setReplayTick(0);
+    setFollowLive(true);
+    setIsReplayPlaying(false);
     lastWorldTickRef.current = 0;
     setScoreSeries([]);
     setFinalReport(null);
@@ -1023,9 +1081,32 @@ export function DeepSimulationSection() {
     }
 
     if (event.type === "progress") {
-      if (typeof event.tick === "number") setTick(event.tick);
+      if (typeof event.tick === "number") {
+        setTick(event.tick);
+        if (followLiveRef.current) setReplayTick(event.tick);
+      }
       if (typeof event.max_ticks === "number") setMaxTicks(event.max_ticks);
-      if (typeof event.summary === "string") setProgressSummary(event.summary);
+      if (typeof event.summary === "string") {
+        setProgressSummary(event.summary);
+      }
+      if (typeof event.tick === "number") {
+        const progressTick = event.tick;
+        const progressSummaryText = typeof event.summary === "string" ? event.summary : "";
+        setTickSnapshots((prev) => {
+          const existing = prev[progressTick];
+          return {
+            ...prev,
+            [progressTick]: {
+              tick: progressTick,
+              phase: existing?.phase ?? DEFAULT_PHASE,
+              summary: progressSummaryText || existing?.summary || "",
+              kpi: existing?.kpi ?? { revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 },
+              actions: existing?.actions ?? [],
+              scoreBreakdown: existing?.scoreBreakdown ?? null,
+            },
+          };
+        });
+      }
       return;
     }
 
@@ -1053,11 +1134,14 @@ export function DeepSimulationSection() {
       if (typeof state.tick === "number") setTick(state.tick);
       if (typeof state.max_ticks === "number") setMaxTicks(state.max_ticks);
       setCurrentPhase(isGamePhase((state as Record<string, unknown>).phase) ? (state as Record<string, unknown>).phase as GamePhase : DEFAULT_PHASE);
-      setPendingActions(mapActionRecords((state as Record<string, unknown>).pending_actions));
-      setResolvedActions(mapActionRecords((state as Record<string, unknown>).resolved_actions));
+      const nextPendingActions = mapActionRecords((state as Record<string, unknown>).pending_actions);
+      const nextResolvedActions = mapActionRecords((state as Record<string, unknown>).resolved_actions);
+      setPendingActions(nextPendingActions);
+      setResolvedActions(nextResolvedActions);
       setActiveEvent(mapActiveEvent((state as Record<string, unknown>).active_event));
       setSocialLinks(mapSocialLinks((state as Record<string, unknown>).social_links));
-      setLatestScoreBreakdown(mapTickScoreBreakdown((state as Record<string, unknown>).latest_score_breakdown));
+      const nextScoreBreakdown = mapTickScoreBreakdown((state as Record<string, unknown>).latest_score_breakdown);
+      setLatestScoreBreakdown(nextScoreBreakdown);
 
       const currentKpi = {
         revenue: 0,
@@ -1073,6 +1157,7 @@ export function DeepSimulationSection() {
         currentKpi.churn_risk = asNumber(k.churn_risk, 0);
       }
       setKpi(currentKpi);
+      if (followLiveRef.current) setReplayTick(stateTick);
 
       if (state.map && typeof state.map === "object") {
         const mapState = state.map as Record<string, unknown>;
@@ -1128,37 +1213,29 @@ export function DeepSimulationSection() {
         }
       }
 
-      return;
-    }
+      const latestTimeline = Array.isArray(state.timeline)
+        ? state.timeline.find((row) => row && typeof row === "object" && typeof (row as Record<string, unknown>).message === "string")
+        : null;
+      const tickSummary =
+        typeof (latestTimeline as Record<string, unknown> | null)?.message === "string"
+          ? String((latestTimeline as Record<string, unknown>).message)
+          : progressSummary;
+      const phaseValue = isGamePhase((state as Record<string, unknown>).phase)
+        ? ((state as Record<string, unknown>).phase as GamePhase)
+        : DEFAULT_PHASE;
+      const combinedActions = [...nextPendingActions, ...nextResolvedActions];
+      setTickSnapshots((prev) => ({
+        ...prev,
+        [stateTick]: {
+          tick: stateTick,
+          phase: phaseValue,
+          summary: tickSummary,
+          kpi: currentKpi,
+          actions: combinedActions,
+          scoreBreakdown: nextScoreBreakdown,
+        },
+      }));
 
-    if (event.type === "agent_tool_call") {
-      if (typeof event.persona_id !== "string" || typeof event.tool_call !== "string") return;
-      const personaId = event.persona_id;
-      setAgents((prev) =>
-        prev.map((agent) =>
-          agent.id === personaId
-            ? { ...agent, toolCalls: [...agent.toolCalls, event.tool_call!].slice(-10), status: "acting" }
-            : agent,
-        ),
-      );
-      setSelectedAgentId((current) => current || personaId);
-      setCameraFollowUntil(Date.now() + 2600);
-      return;
-    }
-
-    if (event.type === "agent_chunk") {
-      if (typeof event.persona_id !== "string") return;
-      const personaId = event.persona_id;
-      const chunk = typeof event.chunk === "string" ? event.chunk : "";
-      setAgents((prev) =>
-        prev.map((agent) =>
-          agent.id === personaId
-            ? { ...agent, status: "acting", transcript: chunk ? `${agent.transcript}${chunk}` : agent.transcript }
-            : agent,
-        ),
-      );
-      setSelectedAgentId((current) => current || personaId);
-      setCameraFollowUntil(Date.now() + 1800);
       return;
     }
 
@@ -1220,6 +1297,10 @@ export function DeepSimulationSection() {
     setActiveEvent(null);
     setSocialLinks([]);
     setLatestScoreBreakdown(null);
+    setTickSnapshots({});
+    setReplayTick(0);
+    setFollowLive(true);
+    setIsReplayPlaying(false);
     lastWorldTickRef.current = 0;
     setScoreSeries([]);
     setFinalReport(null);
@@ -1281,7 +1362,6 @@ export function DeepSimulationSection() {
 
   const sortedAgents = useMemo(() => [...agents].sort((a, b) => b.score - a.score), [agents]);
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
-  const selectedZoneId = selectedAgent ? nearestTileId(selectedAgent.x, selectedAgent.y, boardTiles) : null;
   const relationshipEdges = useMemo(() => {
     const dedupe = new Set<string>();
     const edges: Array<{ from: AgentCard; to: AgentCard; trust: number }> = [];
@@ -1303,25 +1383,27 @@ export function DeepSimulationSection() {
     }
     return edges.slice(0, 18);
   }, [agentById, socialLinks]);
-  const selectedSocialLinks = useMemo(() => {
-    if (!selectedAgent) return [];
-    return socialLinks
-      .filter((link) => link.source_persona_id === selectedAgent.id)
-      .sort((a, b) => Math.abs(b.trust) - Math.abs(a.trust))
-      .slice(0, 6);
-  }, [selectedAgent, socialLinks]);
   const selectedScoreBreakdown = useMemo(() => {
-    if (!selectedAgent || !latestScoreBreakdown) return null;
-    return latestScoreBreakdown.personas.find((item) => item.persona_id === selectedAgent.id) ?? null;
-  }, [latestScoreBreakdown, selectedAgent]);
+    if (!selectedAgent || !activeScoreBreakdown) return null;
+    return activeScoreBreakdown.personas.find((item) => item.persona_id === selectedAgent.id) ?? null;
+  }, [activeScoreBreakdown, selectedAgent]);
   const topScoreBreakdown = useMemo(() => {
-    if (!latestScoreBreakdown) return [];
-    return [...latestScoreBreakdown.personas].sort((a, b) => b.total_delta - a.total_delta).slice(0, 3);
-  }, [latestScoreBreakdown]);
+    if (!activeScoreBreakdown) return [];
+    return [...activeScoreBreakdown.personas].sort((a, b) => b.total_delta - a.total_delta).slice(0, 3);
+  }, [activeScoreBreakdown]);
   const actionQueue = useMemo(
-    () => [...pendingActions, ...resolvedActions].sort((a, b) => (b.tick - a.tick) || a.status.localeCompare(b.status)).slice(0, 10),
-    [pendingActions, resolvedActions],
+    () => [...activeActions].sort((a, b) => (b.tick - a.tick) || a.status.localeCompare(b.status)).slice(0, 12),
+    [activeActions],
   );
+  const actionByPersona = useMemo(() => {
+    const map = new Map<string, ActionRecord>();
+    for (const action of actionQueue) {
+      if (!map.has(action.persona_id)) {
+        map.set(action.persona_id, action);
+      }
+    }
+    return map;
+  }, [actionQueue]);
 
   const adjustBoardScale = (delta: number) => {
     setBoardScale((prev) => clamp(Number((prev + delta).toFixed(2)), 0.8, 1.9));
@@ -1385,7 +1467,7 @@ export function DeepSimulationSection() {
           <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progressPct}%` }} />
         </div>
         <p className="text-[11px] font-light tracking-[0.08em] text-muted-foreground">
-          Day {tick}/{maxTicks} | {progressSummary}
+          Day {activeTick}/{maxTicks} | {activeSummary}
         </p>
       </div>
 
@@ -1437,25 +1519,103 @@ export function DeepSimulationSection() {
                 <Info className="mr-1.5 h-3.5 w-3.5" /> Info
               </Button>
             </div>
+            <div className="rounded-xl border border-border bg-background/80 px-2 py-2">
+              <p className="mb-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Replay</p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setFollowLive(false);
+                    setReplayTick((prev) => Math.max(0, prev - 1));
+                    setIsReplayPlaying(false);
+                  }}
+                  disabled={activeTick <= 0}
+                  className="h-7 px-2 text-xs"
+                >
+                  Prev
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    if (activeTick >= maxReplayTick) {
+                      setFollowLive(false);
+                      setReplayTick(0);
+                    }
+                    setIsReplayPlaying((prev) => !prev);
+                  }}
+                  disabled={maxReplayTick <= 0}
+                  className="h-7 px-2 text-xs"
+                >
+                  {isReplayPlaying ? <Pause className="mr-1 h-3 w-3" /> : <Play className="mr-1 h-3 w-3" />}
+                  {isReplayPlaying ? "Pause" : "Play"}
+                </Button>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(maxReplayTick, 0)}
+                  value={activeTick}
+                  className="h-2 w-[148px] cursor-pointer accent-primary"
+                  onChange={(event) => {
+                    setFollowLive(false);
+                    setIsReplayPlaying(false);
+                    setReplayTick(Number(event.target.value));
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setFollowLive(false);
+                    setReplayTick((prev) => Math.min(maxReplayTick, prev + 1));
+                    setIsReplayPlaying(false);
+                  }}
+                  disabled={activeTick >= maxReplayTick}
+                  className="h-7 px-2 text-xs"
+                >
+                  Next
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={followLive ? "default" : "ghost"}
+                  onClick={() => {
+                    setFollowLive(true);
+                    setReplayTick(tick);
+                    setIsReplayPlaying(false);
+                  }}
+                  className="h-7 px-2 text-xs"
+                >
+                  Live
+                </Button>
+                <span className="text-[11px] font-semibold text-foreground">
+                  Day {activeTick} / {Math.max(maxReplayTick, tick)}
+                </span>
+              </div>
+            </div>
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
           </div>
 
           <div className="mb-3 grid grid-cols-2 gap-2">
             <div className="rounded-xl border border-border bg-background/80 p-2.5">
               <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Revenue</p>
-              <p className="mt-1 text-sm font-semibold">{formatSigned(kpi.revenue)}%</p>
+              <p className="mt-1 text-sm font-semibold">{formatSigned(activeKpi.revenue)}%</p>
             </div>
             <div className="rounded-xl border border-border bg-background/80 p-2.5">
               <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Margin</p>
-              <p className="mt-1 text-sm font-semibold">{formatSigned(kpi.margin)}%</p>
+              <p className="mt-1 text-sm font-semibold">{formatSigned(activeKpi.margin)}%</p>
             </div>
             <div className="rounded-xl border border-border bg-background/80 p-2.5">
               <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Brand Trust</p>
-              <p className="mt-1 text-sm font-semibold">{formatSigned(kpi.sentiment)}</p>
+              <p className="mt-1 text-sm font-semibold">{formatSigned(activeKpi.sentiment)}</p>
             </div>
             <div className="rounded-xl border border-border bg-background/80 p-2.5">
               <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Churn Risk</p>
-              <p className="mt-1 text-sm font-semibold">{formatSigned(kpi.churn_risk)}</p>
+              <p className="mt-1 text-sm font-semibold">{formatSigned(activeKpi.churn_risk)}</p>
             </div>
           </div>
 
@@ -1508,13 +1668,13 @@ export function DeepSimulationSection() {
             <div className="mb-2 flex items-center justify-between">
               <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Why Score Changed</p>
               <span className="text-[10px] text-muted-foreground">
-                {latestScoreBreakdown ? `Day ${latestScoreBreakdown.tick}` : "No tick yet"}
+                {activeScoreBreakdown ? `Day ${activeScoreBreakdown.tick}` : "No tick yet"}
               </span>
             </div>
-            {latestScoreBreakdown ? (
+            {activeScoreBreakdown ? (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">
-                  KPI Shift <span className="font-semibold text-foreground">{formatSigned(latestScoreBreakdown.kpi_shift)}</span>
+                  KPI Shift <span className="font-semibold text-foreground">{formatSigned(activeScoreBreakdown.kpi_shift)}</span>
                 </p>
                 {selectedScoreBreakdown ? (
                   <div className="rounded-lg border border-border bg-card/85 p-2">
@@ -1553,7 +1713,7 @@ export function DeepSimulationSection() {
               <p className="text-sm text-muted-foreground">Canonical board state driven by the simulation engine.</p>
             </div>
             <Badge className="border border-primary/50 bg-primary/12 px-2.5 py-1 text-foreground shadow-sm">
-              <Sparkles className="mr-1 h-3 w-3" /> {phaseLabel(currentPhase)}
+              <Sparkles className="mr-1 h-3 w-3" /> {phaseLabel(activePhase)}
             </Badge>
           </div>
 
@@ -1562,8 +1722,8 @@ export function DeepSimulationSection() {
               <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Turn Loop</p>
               <div className="mt-2 grid grid-cols-3 gap-1.5 xl:grid-cols-6">
                 {PHASE_ORDER.map((phase, idx) => {
-                  const active = phase === currentPhase;
-                  const complete = PHASE_ORDER.indexOf(phase) < PHASE_ORDER.indexOf(currentPhase);
+                  const active = phase === activePhase;
+                  const complete = PHASE_ORDER.indexOf(phase) < PHASE_ORDER.indexOf(activePhase);
                   return (
                     <div
                       key={phase}
@@ -1588,8 +1748,8 @@ export function DeepSimulationSection() {
             </div>
             <div className="rounded-lg border border-border/85 bg-card/92 px-3 py-2.5 shadow-sm">
               <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Current Phase</p>
-              <p className="mt-1 text-sm font-semibold text-foreground">{phaseLabel(currentPhase)}</p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{phaseDescription(currentPhase)}</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{phaseLabel(activePhase)}</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{phaseDescription(activePhase)}</p>
             </div>
           </div>
 
@@ -1797,19 +1957,23 @@ export function DeepSimulationSection() {
             </div>
           </div>
 
-          <div className="relative z-10 grid min-h-0 min-w-0 flex-1 gap-3 lg:grid-cols-[1.05fr_0.95fr]">
+          <div className="relative z-10 grid min-h-0 min-w-0 flex-1 gap-3">
             <div className="min-h-0 overflow-y-auto rounded-xl border border-border/80 bg-background/95 p-3 shadow-sm sim-scroll">
               <div className="mb-3 flex items-center justify-between rounded-lg border border-border/70 bg-card/80 px-2.5 py-2">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Action Queue</p>
-                  <p className="text-xs text-muted-foreground">Pending and resolved legal actions from the engine.</p>
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Tick Feed</p>
+                  <p className="text-xs text-muted-foreground">Summary, action, and points for Day {activeTick}.</p>
                 </div>
                 <Badge className="border border-border bg-card text-foreground">{actionQueue.length}</Badge>
               </div>
               <div className="space-y-2">
-                {actionQueue.length === 0 ? <p className="text-sm text-muted-foreground">No actions queued yet.</p> : null}
+                {actionQueue.length === 0 ? <p className="text-sm text-muted-foreground">No action records for this day yet.</p> : null}
                 {actionQueue.map((action, idx) => (
                   <div key={`${action.persona_id}-${action.tick}-${action.action_type}-${idx}`} className="rounded-xl border border-border/80 bg-card/90 p-3 shadow-sm">
+                    {(() => {
+                      const points = activeScoreBreakdown?.personas.find((row) => row.persona_id === action.persona_id);
+                      return (
+                        <>
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-foreground">{action.persona_name}</p>
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${actionStatusTone(action.status)}`}>
@@ -1819,102 +1983,22 @@ export function DeepSimulationSection() {
                     <p className="mt-1 text-xs text-muted-foreground">
                       Day {action.tick} | {phaseLabel(action.phase)} | {action.action_type.replaceAll("_", " ")}
                     </p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      Origin: {action.requested_via_tool ? (action.requested_tool || "game tool") : "inferred text"}
-                    </p>
                     <p className="mt-2 text-sm text-foreground">{action.summary}</p>
+                    {points ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Points {formatSigned(points.total_delta)} | Total {points.total_score.toFixed(2)}
+                      </p>
+                    ) : null}
                     {action.target_zone_id ? (
                       <p className="mt-1 text-[11px] text-muted-foreground">Zone: {boardTilesById.get(action.target_zone_id)?.name ?? action.target_zone_id}</p>
                     ) : null}
                     {action.outcome ? <p className="mt-2 text-xs text-muted-foreground">{action.outcome}</p> : null}
+                        </>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
-            </div>
-
-            <div className="min-h-0 overflow-y-auto rounded-xl border border-border/80 bg-background/95 p-3 shadow-sm sim-scroll">
-              {!selectedAgent ? <p className="text-sm text-muted-foreground">Select a strategist to inspect their state.</p> : null}
-              {selectedAgent ? (
-                <>
-                  <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/80 px-2.5 py-2">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Selected Strategist</p>
-                      <p className="inline-flex items-center gap-2 text-base font-semibold">
-                        <PersonaAvatar personaId={selectedAgent.id} name={selectedAgent.name} size={20} />
-                        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: selectedAgent.color }} />
-                        {selectedAgent.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">{selectedAgent.role}</p>
-                    </div>
-                    <Badge className={statusBadgeTone(selectedAgent.status)}>{humanStatus(selectedAgent.status)}</Badge>
-                  </div>
-
-                  <div className="mb-3 rounded-lg border border-border/80 bg-card/88 p-3 shadow-sm">
-                    <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Board Presence</p>
-                    <p className="mt-1 text-sm font-semibold text-foreground">
-                      {selectedZoneId ? boardTilesById.get(selectedZoneId)?.name ?? selectedZoneId : "Transit"}
-                    </p>
-                    {selectedAgent.objective ? <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{selectedAgent.objective}</p> : null}
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-foreground">
-                        Confidence {Math.round(selectedAgent.confidence * 100)}%
-                      </span>
-                      <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-foreground">
-                        Score {selectedAgent.score.toFixed(2)}
-                      </span>
-                      {selectedAgent.allowedPaths.length > 0 ? (
-                        <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-foreground">
-                          Context {selectedAgent.allowedPaths.slice(0, 1).join(", ")}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <details open={selectedAgent.status !== "done"}>
-                    <summary className="mb-2 cursor-pointer rounded-md border border-border bg-card/80 px-2 py-1 text-xs text-muted-foreground">
-                      Tool calls ({selectedAgent.toolCalls.length})
-                    </summary>
-                    <div className="space-y-1.5">
-                      {selectedAgent.toolCalls.length === 0 ? <p className="text-xs text-muted-foreground">No tool calls yet.</p> : null}
-                      {selectedAgent.toolCalls.map((call, idx) => (
-                        <div key={`${call}-${idx}`} className="rounded-md border border-border bg-background/80 px-2 py-1.5">
-                          <p className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                            <Wrench className="h-3 w-3" /> Tool call
-                          </p>
-                          <p className="text-xs text-foreground">{call}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-
-                  <div className="mt-3">
-                    <p className="mb-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">Relationship Signals</p>
-                    <div className="mb-3 space-y-1.5">
-                      {selectedSocialLinks.length === 0 ? <p className="text-xs text-muted-foreground">No social interactions yet.</p> : null}
-                      {selectedSocialLinks.map((link) => {
-                        const peer = agentById.get(link.target_persona_id);
-                        const peerName = peer?.name ?? link.target_persona_id;
-                        const trustTone = link.trust >= 0 ? "text-emerald-700" : "text-red-700";
-                        return (
-                          <div key={`${link.source_persona_id}-${link.target_persona_id}`} className="rounded-md border border-border bg-card/85 px-2 py-1.5 text-xs">
-                            <p className="font-semibold text-foreground">{peerName}</p>
-                            <p className={`mt-0.5 ${trustTone}`}>Trust {formatSigned(link.trust)}</p>
-                            <p className="mt-0.5 text-muted-foreground">
-                              Talk {link.talk_count} | Support {link.support_count} | Oppose {link.oppose_count}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <p className="mb-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">Reasoning Feed</p>
-                    <div className="min-w-0 break-words text-sm leading-relaxed text-foreground [&_*]:max-w-full [&_a]:text-primary [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_li]:ml-5 [&_li]:list-disc [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:whitespace-pre-wrap [&_p]:break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/40 [&_pre]:p-2">
-                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                        {selectedAgent.transcript || "Awaiting transcript stream..."}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
-                </>
-              ) : null}
             </div>
           </div>
         </main>
@@ -1946,8 +2030,8 @@ export function DeepSimulationSection() {
             <div className="space-y-2">
               {agents.map((agent) => {
                 const selected = selectedAgentId === agent.id;
-                const latestTool = agent.toolCalls.length > 0 ? agent.toolCalls[agent.toolCalls.length - 1] : "No tool use yet";
-                const preview = (agent.transcript || "Waiting for response...").replace(/\s+/g, " ").slice(0, 170);
+                const action = actionByPersona.get(agent.id);
+                const points = activeScoreBreakdown?.personas.find((row) => row.persona_id === agent.id);
                 return (
                   <button
                     key={agent.id}
@@ -1970,11 +2054,16 @@ export function DeepSimulationSection() {
                     <p className="mt-1 text-[11px] text-muted-foreground">Confidence {Math.round(agent.confidence * 100)}% | Score {agent.score.toFixed(2)}</p>
                     {agent.objective ? <p className="mt-1 text-[11px] text-muted-foreground">{agent.objective}</p> : null}
                     <p className="mt-2 rounded-md border border-border bg-background/80 px-2 py-1.5 text-[11px] text-muted-foreground">
-                      Current move: {latestTool}
+                      Action: {action ? action.action_type.replaceAll("_", " ") : "no action"}
                     </p>
                     <p className="mt-2 rounded-md border border-border bg-background/80 px-2 py-1.5 text-xs text-foreground">
-                      {preview}
+                      {action?.summary || "No summary available for this day."}
                     </p>
+                    {points ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Points {formatSigned(points.total_delta)} | Total {points.total_score.toFixed(2)}
+                      </p>
+                    ) : null}
                   </button>
                 );
               })}
@@ -2131,7 +2220,7 @@ export function DeepSimulationSection() {
               <div>
                 <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">How To Read The UI</p>
                 <p><strong>Left panel</strong>: controls, KPI snapshots, score trends.</p>
-                <p><strong>Center panel</strong>: board state + selected strategist live transcript and tool calls.</p>
+                <p><strong>Center panel</strong>: board state + per-tick strategist summaries, actions, and points.</p>
                 <p><strong>Right panel</strong>: all strategist cards with confidence, score, current move, preview.</p>
                 <p>
                   Board controls: wheel or +/- to zoom, drag to pan, and `Reset View` to re-center map.

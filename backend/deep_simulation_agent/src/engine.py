@@ -30,11 +30,9 @@ from .schema import TimelineEvent
 from .schema import WorldMap
 from .schema import WorldZone
 from .scoring import score_tick
-from .stream_adapter import agent_chunk_event
 from .stream_adapter import progress_event
 from .stream_adapter import tick_event_to_stream
 from .stream_adapter import timeline_event
-from .stream_adapter import tool_call_event
 from .stream_adapter import world_event
 
 WORLD_MIN = 4.0
@@ -717,21 +715,17 @@ class DeepSimulationEngine:
                             source=f"subagent:{persona.id}",
                             payload={"chunk": chunk[:280]},
                         )
-                        yield agent_chunk_event(tick, persona.id, chunk)
-                        yield world_event(self.state)
                     elif event.get("type") == "agent_tool_call":
                         call = str(event.get("tool_call") or "tool(...)")
                         if agent is not None:
                             agent.tool_calls.append(call)
                             agent.tool_calls = agent.tool_calls[-12:]
-                        tick_event = self._record_tick_event(
+                        self._record_tick_event(
                             tick=tick,
                             event_type="tool_call",
                             source=f"subagent:{persona.id}",
                             payload={"tool_call": call},
                         )
-                        yield tool_call_event(tick, persona.id, call)
-                        yield tick_event_to_stream(tick_event)
                     elif event.get("type") == "persona_complete":
                         transcript = str(event.get("transcript") or "")
                         if transcript and agent is not None and not agent.transcript:
