@@ -774,10 +774,6 @@ export function NetworkSimulationSection() {
             <p className='text-lg text-foreground [font-family:"Iowan_Old_Style",Georgia,serif]'>Economic Relationship Network</p>
           </div>
           <div className="flex items-center gap-2">
-            <Badge className="bg-primary/15 text-primary hover:bg-primary/15">
-              <Network className="mr-1 h-3 w-3" />
-              Interactive
-            </Badge>
             <Badge variant="outline">
               <Compass className="mr-1 h-3 w-3" />
               Zoom {zoom.toFixed(2)}x

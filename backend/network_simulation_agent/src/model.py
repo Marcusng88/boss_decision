@@ -20,6 +20,13 @@ def _load_env() -> None:
     backend_root = Path(__file__).resolve().parents[2]
     load_dotenv(backend_root / ".env", override=False)
 
+    zhipu_key = os.getenv("ZHIPU_API_KEY")
+    zhipu_base_url = os.getenv("ZHIPU_BASE_URL")
+    if zhipu_key and not os.getenv("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = zhipu_key
+    if zhipu_base_url and not os.getenv("OPENAI_BASE_URL"):
+        os.environ["OPENAI_BASE_URL"] = zhipu_base_url
+
     google_key = os.getenv("GOOGLE_API_KEY")
     if google_key and not os.getenv("GEMINI_API_KEY"):
         os.environ["GEMINI_API_KEY"] = google_key
@@ -30,6 +37,9 @@ def _infer_default_model() -> str:
     _load_env()
     if os.getenv("NETWORK_SIM_MODEL"):
         return os.getenv("NETWORK_SIM_MODEL", DEFAULT_NETWORK_MODEL)
+    if os.getenv("ZHIPU_API_KEY"):
+        zhipu_model = os.getenv("ZHIPU_MODEL") or os.getenv("LLM_MODEL") or "ilmu-glm-5.1"
+        return zhipu_model if ":" in zhipu_model else f"openai:{zhipu_model}"
     if os.getenv("OPENAI_API_KEY"):
         model = os.getenv("LLM_MODEL", "gpt-4o-mini")
         return model if ":" in model else f"openai:{model}"
@@ -49,7 +59,15 @@ def _get_model(model_name: str) -> Any:
     try:
         from langchain.chat_models import init_chat_model
 
-        _MODEL_CACHE[model_name] = init_chat_model(model=model_name, temperature=0)
+        kwargs: dict[str, Any] = {"temperature": 0}
+        if model_name.startswith("openai:") or ":" not in model_name:
+            openai_key = os.getenv("OPENAI_API_KEY")
+            openai_base = os.getenv("OPENAI_BASE_URL")
+            if openai_key:
+                kwargs["api_key"] = openai_key
+            if openai_base:
+                kwargs["base_url"] = openai_base
+        _MODEL_CACHE[model_name] = init_chat_model(model=model_name, **kwargs)
     except Exception as exc:
         logger.warning("Network simulator model init failed for '%s': %s", model_name, exc)
         _MODEL_CACHE[model_name] = None

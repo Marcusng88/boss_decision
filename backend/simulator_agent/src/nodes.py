@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from pydantic import ValidationError
 
 from .model import get_branch_model
+from .model import get_openai_compat_kwargs
 from .model import get_parser_model
 from .model import get_persona_model_name
 from .model import get_recommendation_model
@@ -221,7 +222,10 @@ def _get_persona_subagent(persona: PersonaTemplate) -> Any:
     try:
         from langchain.chat_models import init_chat_model
 
-        model = init_chat_model(model=model_name, temperature=temperature)
+        kwargs: dict[str, Any] = {"temperature": temperature}
+        if model_name.startswith("openai:") or ":" not in model_name:
+            kwargs.update(get_openai_compat_kwargs())
+        model = init_chat_model(model=model_name, **kwargs)
         agent = create_deep_agent(model=model, system_prompt=system_prompt, tools=tools)
     except Exception:
         # Fallback to model string path if provider integration kwargs are unavailable.
