@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, Clock3, Network, Orbit, Spline } from "lucide-react";
+import { ArrowUpRight, Clock3, MessageSquareText, Network, Orbit, Spline } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 
@@ -73,6 +73,13 @@ export function SimulationLauncherCard({ query }: SimulationLauncherCardProps) {
             <Link to="/simulation-network" target="_blank" rel="noreferrer">
               <Network className="mr-2 h-4 w-4" />
               Open Network Lab
+              <ArrowUpRight className="ml-2 h-4 w-4" />
+            </Link>
+          </Button>
+          <Button asChild variant="outline" className="h-11 border border-border bg-card px-5 text-foreground hover:bg-card/80">
+            <Link to="/simulation-sales-supply-debate" target="_blank" rel="noreferrer">
+              <MessageSquareText className="mr-2 h-4 w-4" />
+              Open Sales-Supply Debate
               <ArrowUpRight className="ml-2 h-4 w-4" />
             </Link>
           </Button>

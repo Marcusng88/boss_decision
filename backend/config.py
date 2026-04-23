@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     
     # LLM Configuration
     openai_api_key: str | None = None
+    openai_base_url: str | None = None
     tavily_api_key: str | None = None
+    zhipu_api_key: str | None = None
+    zhipu_base_url: str | None = None
+    zhipu_model: str | None = None
     llm_model: str = "gpt-4"
     llm_temperature: float = 0.7
     

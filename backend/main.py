@@ -18,6 +18,7 @@ import uvicorn
 from config import get_settings
 from db import DatabaseService
 from services.sales_campaign_service import SalesCampaignService
+from services.sales_supply_debate_service import SalesSupplyDebateService
 
 # Initialize settings
 settings = get_settings()
@@ -109,6 +110,13 @@ class ObserverChatRequest(BaseModel):
     """Request model for post-run observer chat."""
 
     question: str
+
+
+class SalesSupplyDebateRequest(BaseModel):
+    """Request model for sales-vs-supply debate simulator."""
+
+    item_name: Optional[str] = None
+    max_rounds: int = Field(default=4, ge=1, le=10)
 
 
 def _ensure_simulator_import_path() -> None:
@@ -403,21 +411,117 @@ async def stream_simulator(request: SimulatorRequest):
 
 @app.get("/api/supply-chain/{supply_id}/availability")
 async def get_supply_chain_availability(supply_id: int):
-    agent = SupplyChainAgent(supply_id)
-    result = agent.run(query="", context={})
-    
-    threshold = 100
-    inventory_level = result.get("inventory_level", 0)
-    
-    notification = {
-        "triggered": inventory_level < threshold,
-        "message": f"Low inventory alert for {result.get('supplier_name')}: {inventory_level} units remaining." if inventory_level < threshold else ""
-    }
-    
-    return {
-        **result,
-        "notification": notification
-    }
+    """
+    Check a supply record by supply_id and trigger low-inventory notification.
+    """
+    try:
+        agent = SupplyChainAgent(db)
+        insight = await agent.run(
+            query="Check supply availability and restock risk",
+            context={"supply_id": supply_id, "target_type": "supply_record"},
+        )
+
+        if not insight.evidence_used:
+            raise HTTPException(status_code=404, detail=f"Supply record {supply_id} not found")
+
+        record = insight.evidence_used[0]["data"]
+        threshold = SupplyChainAgent.LOW_INVENTORY_THRESHOLD
+        inventory_level = record.get("inventory_level")
+        supplier_name = record.get("supplier_name")
+        item_name = record.get("item_name")
+        unit_cost = record.get("unit_cost")
+
+        is_low_inventory = (
+            isinstance(inventory_level, (int, float)) and inventory_level < threshold
+        )
+
+        notification = {
+            "triggered": is_low_inventory,
+            "message": (
+                f"Restock required for ongoing finish item '{item_name}'. "
+                f"Supplier: {supplier_name}. Unit price: RM {float(unit_cost):,.2f}. "
+                f"Inventory available: {inventory_level} (threshold: {threshold})."
+                if is_low_inventory
+                else "Inventory level is sufficient. Restock notification not triggered."
+            ),
+            "item_name": item_name,
+            "supplier_name": supplier_name,
+            "unit_price_per_unit": float(unit_cost) if unit_cost is not None else None,
+            "inventory_available": inventory_level,
+            "threshold": threshold,
+        }
+
+        return {
+            "supply_id": supply_id,
+            "availability": {
+                "item_name": item_name,
+                "supplier_name": supplier_name,
+                "inventory_available": inventory_level,
+                "unit_price_per_unit": float(unit_cost) if unit_cost is not None else None,
+            },
+            "notification": notification,
+            "agent_insight": insight.model_dump(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supply-chain availability check failed: {str(e)}")
+
+
+@app.get("/api/supply-chain/availability")
+async def get_all_supply_chain_availability():
+    """
+    Retrieve all supply records and evaluate inventory threshold notification.
+    """
+    try:
+        threshold = SupplyChainAgent.LOW_INVENTORY_THRESHOLD
+        records = await db.get_all_supply_records()
+
+        evaluations = []
+        low_inventory_count = 0
+
+        for record in records:
+            inventory_level = record.get("inventory_level")
+            supplier_name = record.get("supplier_name")
+            item_name = record.get("item_name")
+            unit_cost = record.get("unit_cost")
+            supply_id = record.get("supply_id")
+
+            is_low_inventory = (
+                isinstance(inventory_level, (int, float)) and inventory_level < threshold
+            )
+            if is_low_inventory:
+                low_inventory_count += 1
+
+            evaluations.append(
+                {
+                    "supply_id": supply_id,
+                    "item_name": item_name,
+                    "supplier_name": supplier_name,
+                    "inventory_available": inventory_level,
+                    "unit_price_per_unit": float(unit_cost) if unit_cost is not None else None,
+                    "notification": {
+                        "triggered": is_low_inventory,
+                        "message": (
+                            f"Restock required for ongoing finish item '{item_name}'. "
+                            f"Supplier: {supplier_name}. Unit price: RM {float(unit_cost):,.2f}. "
+                            f"Inventory available: {inventory_level} (threshold: {threshold})."
+                            if is_low_inventory
+                            else "Inventory level is sufficient. Restock notification not triggered."
+                        ),
+                        "threshold": threshold,
+                    },
+                }
+            )
+
+        return {
+            "threshold": threshold,
+            "total_records": len(evaluations),
+            "low_inventory_records": low_inventory_count,
+            "records": evaluations,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supply-chain availability list check failed: {str(e)}")
 
 @app.post("/api/deep-simulator/run")
 async def run_deep_simulator(request: DeepSimulatorRequest):
@@ -466,6 +570,23 @@ async def run_network_simulator(request: NetworkSimulatorRequest):
         return {"status": "ok", "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Network simulator run failed: {str(e)}")
+
+
+@app.post("/api/simulator/sales-supply-debate")
+async def run_sales_supply_debate_simulator(request: SalesSupplyDebateRequest):
+    """
+    Simulate a debate loop between Sales agent (AI-1) and Supply Chain agent (AI-2)
+    based on supply_record.item_name and inventory constraints.
+    """
+    try:
+        service = SalesSupplyDebateService(db)
+        result = await service.run(
+            max_rounds=request.max_rounds,
+            item_name=request.item_name,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sales-supply debate simulation failed: {str(e)}")
 
 
 @app.post("/api/network-simulator/stream")
@@ -573,4 +694,3 @@ if __name__ == "__main__":
         port=settings.port,
         reload=True  # Auto-reload on code changes (development only)
     )
-
