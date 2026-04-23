@@ -8,6 +8,7 @@ import NotFound from "./pages/NotFound.tsx";
 import SimulationLive from "./pages/SimulationLive.tsx";
 import DeepSimulationLive from "./pages/DeepSimulationLive.tsx";
 import NetworkSimulationLive from "./pages/NetworkSimulationLive.tsx";
+import SimulatorsHub from "./pages/SimulatorsHub.tsx";
 
 const queryClient = new QueryClient();
 
@@ -19,6 +20,7 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Index />} />
+          <Route path="/simulators" element={<SimulatorsHub />} />
           <Route path="/simulation-live" element={<SimulationLive />} />
           <Route path="/simulation-deep" element={<DeepSimulationLive />} />
           <Route path="/simulation-network" element={<NetworkSimulationLive />} />

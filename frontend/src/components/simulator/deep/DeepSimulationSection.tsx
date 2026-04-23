@@ -27,6 +27,7 @@ import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "rec
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { DeepSimulatorStreamEvent, streamDeepSimulator } from "@/lib/simulator-client";
 
 type AgentStatus = "idle" | "thinking" | "acting" | "done";
@@ -916,9 +917,13 @@ export function DeepSimulationSection() {
 
   const abortRef = useRef<AbortController | null>(null);
   const followLiveRef = useRef(true);
-  const lastWorldTickRef = useRef(0);
-  const timelineRef = useRef<TimelineEvent[]>([]);
-  const lastWorldUiTsRef = useRef(0);
+  const tickRef = useRef(0);
+  const boardTilesRef = useRef<BoardTile[]>(DEFAULT_TILES);
+  const progressSummaryRef = useRef("Ready to run the tycoon crisis simulation.");
+  const pendingProgressRef = useRef<{ tick?: number; maxTicks?: number; summary?: string } | null>(null);
+  const pendingTimelineRowsRef = useRef<TimelineEvent[]>([]);
+  const pendingWorldStateRef = useRef<Record<string, unknown> | null>(null);
+  const streamFlushFrameRef = useRef<number | null>(null);
   const pulseTimersRef = useRef<number[]>([]);
   const shakeTimerRef = useRef<number | null>(null);
   const boardDragRef = useRef<{
@@ -935,12 +940,25 @@ export function DeepSimulationSection() {
       pulseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       pulseTimersRef.current = [];
       if (shakeTimerRef.current !== null) window.clearTimeout(shakeTimerRef.current);
+      if (streamFlushFrameRef.current !== null) window.cancelAnimationFrame(streamFlushFrameRef.current);
     };
   }, []);
 
   useEffect(() => {
     followLiveRef.current = followLive;
   }, [followLive]);
+
+  useEffect(() => {
+    tickRef.current = tick;
+  }, [tick]);
+
+  useEffect(() => {
+    boardTilesRef.current = boardTiles;
+  }, [boardTiles]);
+
+  useEffect(() => {
+    progressSummaryRef.current = progressSummary;
+  }, [progressSummary]);
 
   useEffect(() => {
     if (!isReplayPlaying) return;
@@ -1003,7 +1021,10 @@ export function DeepSimulationSection() {
   const activePhase = activeSnapshot?.phase ?? currentPhase;
   const activeKpi = activeSnapshot?.kpi ?? kpi;
   const activeScoreBreakdown = activeSnapshot?.scoreBreakdown ?? (followLive ? latestScoreBreakdown : null);
-  const activeActions = activeSnapshot?.actions ?? [...pendingActions, ...resolvedActions];
+  const activeActions = useMemo(
+    () => activeSnapshot?.actions ?? [...pendingActions, ...resolvedActions],
+    [activeSnapshot, pendingActions, resolvedActions],
+  );
   const activeSummary = activeSnapshot?.summary || progressSummary;
 
   const pulseTiles = (tileIds: string[]) => {
@@ -1045,7 +1066,6 @@ export function DeepSimulationSection() {
     setAgents(BASE_AGENTS);
     setSelectedAgentId(BASE_AGENTS[0].id);
     setTimeline([]);
-    timelineRef.current = [];
     setBoardTiles(DEFAULT_TILES);
     setKpi({ revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 });
     setCurrentPhase(DEFAULT_PHASE);
@@ -1058,12 +1078,17 @@ export function DeepSimulationSection() {
     setReplayTick(0);
     setFollowLive(true);
     setIsReplayPlaying(false);
-    lastWorldTickRef.current = 0;
+    pendingProgressRef.current = null;
+    pendingTimelineRowsRef.current = [];
+    pendingWorldStateRef.current = null;
+    if (streamFlushFrameRef.current !== null) {
+      window.cancelAnimationFrame(streamFlushFrameRef.current);
+      streamFlushFrameRef.current = null;
+    }
     setScoreSeries([]);
     setFinalReport(null);
     setShowResultCard(false);
     setShowInfoCard(false);
-    lastWorldUiTsRef.current = 0;
     setBoardScale(1);
     setBoardOffset({ x: 0, y: 0 });
     setIsBoardDragging(false);
@@ -1073,25 +1098,109 @@ export function DeepSimulationSection() {
     setCameraFollowUntil(0);
   };
 
-  const handleEvent = (event: DeepSimulatorStreamEvent) => {
-    if (event.type === "status") {
-      if (typeof event.max_ticks === "number") setMaxTicks(event.max_ticks);
-      if (typeof event.message === "string") setProgressSummary(event.message);
-      return;
+  const applyWorldState = (state: Record<string, unknown>) => {
+    const stateTick = typeof state.tick === "number" ? state.tick : tickRef.current;
+    if (typeof state.tick === "number") setTick(state.tick);
+    if (typeof state.max_ticks === "number") setMaxTicks(state.max_ticks);
+    setCurrentPhase(
+      isGamePhase(state.phase) ? (state.phase as GamePhase) : DEFAULT_PHASE,
+    );
+    const nextPendingActions = mapActionRecords(state.pending_actions);
+    const nextResolvedActions = mapActionRecords(state.resolved_actions);
+    setPendingActions(nextPendingActions);
+    setResolvedActions(nextResolvedActions);
+    setActiveEvent(mapActiveEvent(state.active_event));
+    setSocialLinks(mapSocialLinks(state.social_links));
+    const nextScoreBreakdown = mapTickScoreBreakdown(state.latest_score_breakdown);
+    setLatestScoreBreakdown(nextScoreBreakdown);
+
+    const currentKpi = {
+      revenue: 0,
+      margin: 0,
+      sentiment: 0,
+      churn_risk: 0,
+    };
+    if (state.kpi && typeof state.kpi === "object") {
+      const k = state.kpi as Record<string, unknown>;
+      currentKpi.revenue = asNumber(k.revenue, 0);
+      currentKpi.margin = asNumber(k.margin, 0);
+      currentKpi.sentiment = asNumber(k.sentiment, 0);
+      currentKpi.churn_risk = asNumber(k.churn_risk, 0);
+    }
+    setKpi(currentKpi);
+    if (followLiveRef.current) setReplayTick(stateTick);
+
+    let effectiveTiles = boardTilesRef.current;
+    if (state.map && typeof state.map === "object") {
+      const mapState = state.map as Record<string, unknown>;
+      effectiveTiles = mapBoardTiles(mapState.zones, boardTilesRef.current);
+      setBoardTiles(effectiveTiles);
     }
 
-    if (event.type === "progress") {
-      if (typeof event.tick === "number") {
-        setTick(event.tick);
-        if (followLiveRef.current) setReplayTick(event.tick);
+    const scores = asScoreMap(state.scores);
+    const positions = asScoreMap(state.positions);
+    setAgents((prev) => {
+      const next = mapWorldAgents(state.agents, prev);
+      const withPersonaProfiles = applyPersonaProfiles(state.personas, next);
+      const withScores = withPersonaProfiles.map((agent) => {
+        const tileIndex = Math.max(0, Math.round(asNumber(positions[agent.id], 0)));
+        const tile = effectiveTiles.length > 0 ? effectiveTiles[tileIndex % effectiveTiles.length] : null;
+        return {
+          ...agent,
+          x: tile ? tile.x : agent.x,
+          y: tile ? tile.y : agent.y,
+          score: scores[agent.id] ?? agent.score,
+        };
+      });
+      const activeTileIds = withScores
+        .filter((agent) => agent.status === "acting" || agent.status === "thinking")
+        .map((agent) => nearestTileId(agent.x, agent.y, effectiveTiles))
+        .filter((tileId): tileId is string => Boolean(tileId));
+      pulseTiles(activeTileIds);
+      return withScores.length > 0 ? withScores : prev;
+    });
+
+    if (Object.keys(scores).length > 0 && stateTick > 0) {
+      setScoreSeries((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.tick === stateTick) {
+          const merged = { ...last, ...scores };
+          return [...prev.slice(0, -1), merged];
+        }
+        return [...prev, { tick: stateTick, ...scores }].slice(-180);
+      });
+    }
+
+    const phaseValue = isGamePhase(state.phase) ? (state.phase as GamePhase) : DEFAULT_PHASE;
+    const combinedActions = [...nextPendingActions, ...nextResolvedActions];
+    setTickSnapshots((prev) => ({
+      ...prev,
+      [stateTick]: {
+        tick: stateTick,
+        phase: phaseValue,
+        summary: progressSummaryRef.current || `Day ${stateTick}`,
+        kpi: currentKpi,
+        actions: combinedActions,
+        scoreBreakdown: nextScoreBreakdown,
+      },
+    }));
+  };
+
+  const flushPendingStream = () => {
+    streamFlushFrameRef.current = null;
+
+    const progress = pendingProgressRef.current;
+    pendingProgressRef.current = null;
+    if (progress) {
+      if (typeof progress.tick === "number") {
+        setTick(progress.tick);
+        if (followLiveRef.current) setReplayTick(progress.tick);
       }
-      if (typeof event.max_ticks === "number") setMaxTicks(event.max_ticks);
-      if (typeof event.summary === "string") {
-        setProgressSummary(event.summary);
-      }
-      if (typeof event.tick === "number") {
-        const progressTick = event.tick;
-        const progressSummaryText = typeof event.summary === "string" ? event.summary : "";
+      if (typeof progress.maxTicks === "number") setMaxTicks(progress.maxTicks);
+      if (typeof progress.summary === "string") setProgressSummary(progress.summary);
+      if (typeof progress.tick === "number") {
+        const progressTick = progress.tick;
+        const progressSummaryText = typeof progress.summary === "string" ? progress.summary : "";
         setTickSnapshots((prev) => {
           const existing = prev[progressTick];
           return {
@@ -1107,135 +1216,65 @@ export function DeepSimulationSection() {
           };
         });
       }
+    }
+
+    const timelineRows = pendingTimelineRowsRef.current;
+    pendingTimelineRowsRef.current = [];
+    if (timelineRows.length > 0) {
+      const ordered = [...timelineRows].reverse();
+      setTimeline((prev) => [...ordered, ...prev].slice(0, 160));
+      const pulseSet = new Set<string>();
+      let shouldShake = false;
+      for (const row of timelineRows) {
+        inferTilesFromMessage(row.message, boardTilesRef.current).forEach((id) => pulseSet.add(id));
+        if (isShockMessage(row.message)) shouldShake = true;
+      }
+      if (pulseSet.size > 0) pulseTiles([...pulseSet]);
+      if (shouldShake) triggerBoardShake();
+    }
+
+    const worldState = pendingWorldStateRef.current;
+    pendingWorldStateRef.current = null;
+    if (worldState) applyWorldState(worldState);
+  };
+
+  const scheduleStreamFlush = () => {
+    if (streamFlushFrameRef.current !== null) return;
+    streamFlushFrameRef.current = window.requestAnimationFrame(flushPendingStream);
+  };
+
+  const handleEvent = (event: DeepSimulatorStreamEvent) => {
+    if (event.type === "status") {
+      if (typeof event.max_ticks === "number") setMaxTicks(event.max_ticks);
+      if (typeof event.message === "string") setProgressSummary(event.message);
+      return;
+    }
+
+    if (event.type === "progress") {
+      pendingProgressRef.current = {
+        tick: typeof event.tick === "number" ? event.tick : pendingProgressRef.current?.tick,
+        maxTicks: typeof event.max_ticks === "number" ? event.max_ticks : pendingProgressRef.current?.maxTicks,
+        summary: typeof event.summary === "string" ? event.summary : pendingProgressRef.current?.summary,
+      };
+      scheduleStreamFlush();
       return;
     }
 
     if (event.type === "timeline") {
       if (typeof event.tick !== "number" || typeof event.message !== "string") return;
-      const row: TimelineEvent = {
+      pendingTimelineRowsRef.current.push({
         id: `${event.tick}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         tick: event.tick,
         message: event.message,
-      };
-      setTimeline((prev) => {
-        const next = [row, ...prev].slice(0, 160);
-        timelineRef.current = next;
-        return next;
       });
-      pulseTiles(inferTilesFromMessage(event.message, boardTiles));
-      if (isShockMessage(event.message)) triggerBoardShake();
+      scheduleStreamFlush();
       return;
     }
 
     if (event.type === "world") {
       if (!event.state || typeof event.state !== "object") return;
-      const state = event.state;
-      const stateTick = typeof state.tick === "number" ? state.tick : tick;
-      if (typeof state.tick === "number") setTick(state.tick);
-      if (typeof state.max_ticks === "number") setMaxTicks(state.max_ticks);
-      setCurrentPhase(isGamePhase((state as Record<string, unknown>).phase) ? (state as Record<string, unknown>).phase as GamePhase : DEFAULT_PHASE);
-      const nextPendingActions = mapActionRecords((state as Record<string, unknown>).pending_actions);
-      const nextResolvedActions = mapActionRecords((state as Record<string, unknown>).resolved_actions);
-      setPendingActions(nextPendingActions);
-      setResolvedActions(nextResolvedActions);
-      setActiveEvent(mapActiveEvent((state as Record<string, unknown>).active_event));
-      setSocialLinks(mapSocialLinks((state as Record<string, unknown>).social_links));
-      const nextScoreBreakdown = mapTickScoreBreakdown((state as Record<string, unknown>).latest_score_breakdown);
-      setLatestScoreBreakdown(nextScoreBreakdown);
-
-      const currentKpi = {
-        revenue: 0,
-        margin: 0,
-        sentiment: 0,
-        churn_risk: 0,
-      };
-      if (state.kpi && typeof state.kpi === "object") {
-        const k = state.kpi as Record<string, unknown>;
-        currentKpi.revenue = asNumber(k.revenue, 0);
-        currentKpi.margin = asNumber(k.margin, 0);
-        currentKpi.sentiment = asNumber(k.sentiment, 0);
-        currentKpi.churn_risk = asNumber(k.churn_risk, 0);
-      }
-      setKpi(currentKpi);
-      if (followLiveRef.current) setReplayTick(stateTick);
-
-      if (state.map && typeof state.map === "object") {
-        const mapState = state.map as Record<string, unknown>;
-        setBoardTiles((prev) => mapBoardTiles(mapState.zones, prev));
-      }
-
-      const scores = asScoreMap((state as Record<string, unknown>).scores);
-      const now = Date.now();
-      const shouldPaintHeavy = now - lastWorldUiTsRef.current > 140 || stateTick !== lastWorldTickRef.current;
-
-      setAgents((prev) => {
-        const next = mapWorldAgents(state.agents, prev);
-        const withPersonaProfiles = applyPersonaProfiles((state as Record<string, unknown>).personas, next);
-        const withScores = withPersonaProfiles.map((agent) => ({ ...agent, score: scores[agent.id] ?? agent.score }));
-        const activeTileIds = withScores
-          .filter((agent) => agent.status === "acting" || agent.status === "thinking")
-          .map((agent) => nearestTileId(agent.x, agent.y, boardTiles))
-          .filter((tileId): tileId is string => Boolean(tileId));
-        pulseTiles(activeTileIds);
-        return withScores.length > 0 ? withScores : prev;
-      });
-
-      if (Object.keys(scores).length > 0 && stateTick > 0) {
-        setScoreSeries((prev) => {
-          const last = prev[prev.length - 1];
-          if (last && last.tick === stateTick) {
-            const merged = { ...last, ...scores };
-            return [...prev.slice(0, -1), merged];
-          }
-          return [...prev, { tick: stateTick, ...scores }].slice(-180);
-        });
-      }
-
-      if (!shouldPaintHeavy) return;
-      lastWorldUiTsRef.current = now;
-      lastWorldTickRef.current = stateTick;
-
-      if (Array.isArray(state.timeline)) {
-        const timelineRows = state.timeline
-          .map((row) => {
-            if (!row || typeof row !== "object") return null;
-            const data = row as Record<string, unknown>;
-            if (typeof data.id !== "string" || typeof data.tick !== "number" || typeof data.message !== "string") {
-              return null;
-            }
-            return { id: data.id, tick: data.tick, message: data.message };
-          })
-          .filter((item): item is TimelineEvent => item !== null);
-        if (timelineRows.length > 0) {
-          const trimmed = timelineRows.slice(0, 160);
-          timelineRef.current = trimmed;
-          setTimeline(trimmed);
-        }
-      }
-
-      const latestTimeline = Array.isArray(state.timeline)
-        ? state.timeline.find((row) => row && typeof row === "object" && typeof (row as Record<string, unknown>).message === "string")
-        : null;
-      const tickSummary =
-        typeof (latestTimeline as Record<string, unknown> | null)?.message === "string"
-          ? String((latestTimeline as Record<string, unknown>).message)
-          : progressSummary;
-      const phaseValue = isGamePhase((state as Record<string, unknown>).phase)
-        ? ((state as Record<string, unknown>).phase as GamePhase)
-        : DEFAULT_PHASE;
-      const combinedActions = [...nextPendingActions, ...nextResolvedActions];
-      setTickSnapshots((prev) => ({
-        ...prev,
-        [stateTick]: {
-          tick: stateTick,
-          phase: phaseValue,
-          summary: tickSummary,
-          kpi: currentKpi,
-          actions: combinedActions,
-          scoreBreakdown: nextScoreBreakdown,
-        },
-      }));
-
+      pendingWorldStateRef.current = event.state as Record<string, unknown>;
+      scheduleStreamFlush();
       return;
     }
 
@@ -1289,7 +1328,6 @@ export function DeepSimulationSection() {
     setProgressSummary("Setting up dynamic districts and crisis deck...");
     setAgents(BASE_AGENTS.map((agent) => ({ ...agent, transcript: "", toolCalls: [], status: "idle", score: 0 })));
     setTimeline([]);
-    timelineRef.current = [];
     setKpi({ revenue: 0, margin: 0, sentiment: 0, churn_risk: 0 });
     setCurrentPhase(DEFAULT_PHASE);
     setPendingActions([]);
@@ -1301,12 +1339,17 @@ export function DeepSimulationSection() {
     setReplayTick(0);
     setFollowLive(true);
     setIsReplayPlaying(false);
-    lastWorldTickRef.current = 0;
+    pendingProgressRef.current = null;
+    pendingTimelineRowsRef.current = [];
+    pendingWorldStateRef.current = null;
+    if (streamFlushFrameRef.current !== null) {
+      window.cancelAnimationFrame(streamFlushFrameRef.current);
+      streamFlushFrameRef.current = null;
+    }
     setScoreSeries([]);
     setFinalReport(null);
     setShowResultCard(false);
     setShowInfoCard(false);
-    lastWorldUiTsRef.current = 0;
     setBoardScale(1);
     setBoardOffset({ x: 0, y: 0 });
     setIsBoardDragging(false);
@@ -1404,6 +1447,148 @@ export function DeepSimulationSection() {
     }
     return map;
   }, [actionQueue]);
+  const relationshipEdgeLines = useMemo(
+    () =>
+      relationshipEdges.map((edge, idx) => {
+        const stroke = edge.trust >= 0 ? "hsl(148 55% 38% / 0.72)" : "hsl(2 70% 44% / 0.72)";
+        const width = 1.2 + Math.min(1.8, Math.abs(edge.trust) * 2.2);
+        return (
+          <line
+            key={`rel-${edge.from.id}-${edge.to.id}-${idx}`}
+            x1={edge.from.x}
+            y1={edge.from.y}
+            x2={edge.to.x}
+            y2={edge.to.y}
+            stroke={stroke}
+            strokeWidth={width}
+            strokeDasharray={edge.trust >= 0 ? undefined : "4 3"}
+            strokeLinecap="round"
+          />
+        );
+      }),
+    [relationshipEdges],
+  );
+  const boardRouteLines = useMemo(
+    () =>
+      boardEdges.map((edge) => {
+        const from = boardTilesById.get(edge.from);
+        const to = boardTilesById.get(edge.to);
+        if (!from || !to) return null;
+        return (
+          <g key={`${edge.from}-${edge.to}`}>
+            <line
+              x1={from.x}
+              y1={from.y}
+              x2={to.x}
+              y2={to.y}
+              stroke="hsl(var(--muted-foreground) / 0.2)"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+            <line
+              className="board-edge-flow"
+              x1={from.x}
+              y1={from.y}
+              x2={to.x}
+              y2={to.y}
+              stroke="hsl(var(--muted-foreground) / 0.68)"
+              strokeWidth="0.95"
+              strokeDasharray="3.1 3.1"
+              strokeLinecap="round"
+              markerEnd="url(#board-route-arrow)"
+            />
+          </g>
+        );
+      }),
+    [boardEdges, boardTilesById],
+  );
+  const boardTileNodes = useMemo(
+    () =>
+      boardTiles.map((tile) => {
+        const visual = tileVisual(tile.id);
+        const TileIcon = visual.icon;
+        const intensity = tileActivity[tile.id] ?? 0;
+        const pulsed = pulsedTileIds.includes(tile.id);
+        return (
+          <div
+            key={tile.id}
+            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+            style={{ left: `${tile.x}%`, top: `${tile.y}%` }}
+          >
+            <div className="relative w-28">
+              <span
+                className={`pointer-events-none absolute left-1/2 top-[48%] h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl ${pulsed ? "tile-ping" : ""}`}
+                style={{
+                  backgroundColor: visual.glowColor,
+                  opacity: pulsed ? 0.95 : Math.min(0.54, 0.2 + intensity * 0.12),
+                }}
+              />
+              <span
+                className="pointer-events-none absolute left-1/2 top-[48%] h-20 w-20 -translate-x-1/2 -translate-y-1/2 rounded-full border border-border/45"
+                style={{
+                  boxShadow: intensity > 0 ? `0 0 0 1px ${visual.glowColor}, 0 0 24px ${visual.glowColor}` : undefined,
+                  opacity: intensity > 0 ? Math.min(0.88, 0.36 + intensity * 0.18) : 0,
+                }}
+              />
+              <div className="relative mx-auto mb-1 flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-border/90 bg-card/95 shadow-[0_7px_14px_rgba(0,0,0,0.18)]">
+                <div className={`absolute inset-x-0 top-0 h-1 ${visual.accentClass}`} />
+                <TileIcon className={`relative h-5 w-5 ${visual.iconClass}`} />
+              </div>
+              <div className="rounded-md border border-border/80 bg-card px-2 py-1.5 text-card-foreground shadow-sm">
+                <p className="line-clamp-1 text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-foreground">
+                  {tile.name}
+                </p>
+                <div className="mt-1 flex items-center justify-center gap-1">
+                  <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] ${visual.effectToneClass}`}>
+                    {zoneSummary(tile.id)}
+                  </span>
+                </div>
+                <div className="mt-1.5 flex gap-0.5">
+                  {Array.from({ length: visual.blocks }).map((_, idx) => (
+                    <span
+                      key={`${tile.id}-b-${idx}`}
+                      className="h-1.5 flex-1 rounded-[2px] border border-border/70 bg-muted"
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }),
+    [boardTiles, tileActivity, pulsedTileIds],
+  );
+  const boardAgentNodes = useMemo(
+    () =>
+      agents.map((agent) => {
+        const isSelected = agent.id === selectedAgentId;
+        const tokenMotionClass = boardTokenTone(agent.status);
+        return (
+          <button
+            key={agent.id}
+            type="button"
+            onClick={() => setSelectedAgentId(agent.id)}
+            className="absolute -translate-x-1/2 -translate-y-1/2"
+            style={{ left: `${agent.x}%`, top: `${agent.y}%` }}
+            title={`${agent.name}: ${boardStatusBubble(agent)}`}
+          >
+            <span
+              className={`inline-flex rounded-full border-2 bg-card/95 p-0.5 shadow-lg ${tokenMotionClass} ${isSelected ? "ring-2 ring-primary/70" : ""}`}
+              style={{ borderColor: agent.color }}
+            >
+              <PersonaAvatar personaId={agent.id} name={agent.name} size={28} />
+            </span>
+            <span
+              className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-card px-1.5 py-0.5 text-[9px] font-medium text-foreground shadow-sm"
+              style={{ borderColor: `${agent.color}66` }}
+            >
+              {boardStatusBubble(agent)}
+            </span>
+          </button>
+        );
+      }),
+    [agents, selectedAgentId],
+  );
 
   const adjustBoardScale = (delta: number) => {
     setBoardScale((prev) => clamp(Number((prev + delta).toFixed(2)), 0.8, 1.9));
@@ -1471,13 +1656,14 @@ export function DeepSimulationSection() {
         </p>
       </div>
 
-      <div className="grid h-[calc(100vh-10.8rem)] gap-4 px-5 py-5 md:px-8 lg:grid-cols-[1.2fr_1.5fr_1.2fr]">
-        <aside className="flex h-full min-h-0 min-w-0 flex-col rounded-2xl border border-border bg-card/85 p-4">
+      <div className="grid min-h-[calc(100vh-10.8rem)] gap-4 px-5 py-5 md:px-8 lg:grid-cols-[minmax(320px,1.2fr)_minmax(540px,1.5fr)_minmax(320px,1.2fr)]">
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-y-auto rounded-2xl border border-border bg-card/85 p-4 sim-scroll">
           <div className="mb-3 flex flex-col gap-2">
-            <Input
+            <Textarea
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              className="h-9 border-border bg-background/80 text-foreground placeholder:text-muted-foreground"
+              rows={2}
+              className="min-h-[3.1rem] resize-none border-border bg-background/80 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground"
               placeholder="Ask a deep simulation question..."
             />
             <div className="grid grid-cols-[1fr_auto] items-center gap-2 rounded-xl border border-border bg-background/70 px-2 py-2">
@@ -1497,7 +1683,7 @@ export function DeepSimulationSection() {
                 className="h-8 w-24 border-border bg-background text-right text-sm"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button onClick={startSimulation} disabled={running} className="h-9 border border-primary/35 bg-primary px-3 text-primary-foreground hover:bg-primary/90">
                 <Play className="mr-1.5 h-3.5 w-3.5" /> Start
               </Button>
@@ -1507,6 +1693,8 @@ export function DeepSimulationSection() {
               <Button onClick={resetSimulation} variant="outline" className="h-9 px-3">
                 <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset
               </Button>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 onClick={() => setShowResultCard(true)}
                 disabled={!finalReport}
@@ -1553,18 +1741,6 @@ export function DeepSimulationSection() {
                   {isReplayPlaying ? <Pause className="mr-1 h-3 w-3" /> : <Play className="mr-1 h-3 w-3" />}
                   {isReplayPlaying ? "Pause" : "Play"}
                 </Button>
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(maxReplayTick, 0)}
-                  value={activeTick}
-                  className="h-2 w-[148px] cursor-pointer accent-primary"
-                  onChange={(event) => {
-                    setFollowLive(false);
-                    setIsReplayPlaying(false);
-                    setReplayTick(Number(event.target.value));
-                  }}
-                />
                 <Button
                   type="button"
                   size="sm"
@@ -1592,6 +1768,20 @@ export function DeepSimulationSection() {
                 >
                   Live
                 </Button>
+                <div className="flex min-w-[170px] flex-1 items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(maxReplayTick, 0)}
+                    value={activeTick}
+                    className="h-2 min-w-0 flex-1 cursor-pointer accent-primary"
+                    onChange={(event) => {
+                      setFollowLive(false);
+                      setIsReplayPlaying(false);
+                      setReplayTick(Number(event.target.value));
+                    }}
+                  />
+                </div>
                 <span className="text-[11px] font-semibold text-foreground">
                   Day {activeTick} / {Math.max(maxReplayTick, tick)}
                 </span>
@@ -1720,14 +1910,14 @@ export function DeepSimulationSection() {
           <div className="relative z-10 mb-3 grid gap-2 rounded-xl border border-border/80 bg-background/88 p-2.5 shadow-[inset_0_1px_0_hsl(var(--background)/0.55)] lg:grid-cols-[1.35fr_1fr]">
             <div>
               <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Turn Loop</p>
-              <div className="mt-2 grid grid-cols-3 gap-1.5 xl:grid-cols-6">
+              <div className="mt-2 flex flex-wrap gap-1.5">
                 {PHASE_ORDER.map((phase, idx) => {
                   const active = phase === activePhase;
                   const complete = PHASE_ORDER.indexOf(phase) < PHASE_ORDER.indexOf(activePhase);
                   return (
                     <div
                       key={phase}
-                      className={`rounded-lg border px-2 py-2 text-[11px] transition-all duration-200 ${
+                      className={`min-w-[102px] flex-1 rounded-lg border px-2 py-2 text-[11px] transition-all duration-200 ${
                         active
                           ? "border-primary/70 bg-primary/12 text-foreground shadow-[0_0_0_1px_hsl(var(--primary)/0.15)]"
                           : complete
@@ -1735,7 +1925,7 @@ export function DeepSimulationSection() {
                             : "border-border/80 bg-card/95 text-foreground/80"
                       }`}
                     >
-                      <p className="inline-flex items-center gap-1.5 font-semibold uppercase tracking-[0.08em]">
+                      <p className="inline-flex items-center gap-1.5 font-semibold uppercase tracking-[0.05em]">
                         <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full border text-[9px] ${active ? "border-primary/55 bg-primary/15" : "border-border/75 bg-background/85"}`}>
                           {idx + 1}
                         </span>
@@ -1799,13 +1989,13 @@ export function DeepSimulationSection() {
               onPointerUp={onBoardPointerUp}
               onPointerCancel={onBoardPointerUp}
             >
-              <div
-                className="absolute inset-0 origin-center"
-                style={{
-                  transform: `translate(${boardOffset.x}px, ${boardOffset.y}px) scale(${boardScale})`,
-                  transition: isBoardDragging ? "none" : "transform 260ms cubic-bezier(0.22, 1, 0.36, 1)",
-                }}
-              >
+                <div
+                  className="absolute inset-x-0 bottom-0 top-10 origin-center"
+                  style={{
+                    transform: `translate(${boardOffset.x}px, ${boardOffset.y}px) scale(${boardScale})`,
+                    transition: "none",
+                  }}
+                >
                 <div className="pointer-events-none absolute left-1/2 top-1/2 h-[73%] w-[86%] -translate-x-1/2 -translate-y-1/2 rounded-[28px] border border-border/55 bg-[linear-gradient(180deg,hsl(var(--background)/0.4),hsl(var(--muted)/0.24))]" />
                 <div className="pointer-events-none absolute left-1/2 top-1/2 h-[63%] w-[74%] -translate-x-1/2 -translate-y-1/2 rounded-[999px] border border-primary/25 bg-primary/5" />
 
@@ -1815,139 +2005,15 @@ export function DeepSimulationSection() {
                       <path d="M 0 0 L 10 5 L 0 10 z" fill="hsl(var(--muted-foreground) / 0.72)" />
                     </marker>
                   </defs>
-                  {relationshipEdges.map((edge, idx) => {
-                    const stroke = edge.trust >= 0 ? "hsl(148 55% 38% / 0.72)" : "hsl(2 70% 44% / 0.72)";
-                    const width = 1.2 + Math.min(1.8, Math.abs(edge.trust) * 2.2);
-                    return (
-                      <line
-                        key={`rel-${edge.from.id}-${edge.to.id}-${idx}`}
-                        x1={edge.from.x}
-                        y1={edge.from.y}
-                        x2={edge.to.x}
-                        y2={edge.to.y}
-                        stroke={stroke}
-                        strokeWidth={width}
-                        strokeDasharray={edge.trust >= 0 ? undefined : "4 3"}
-                        strokeLinecap="round"
-                      />
-                    );
-                  })}
-                  {boardEdges.map((edge) => {
-                    const from = boardTilesById.get(edge.from);
-                    const to = boardTilesById.get(edge.to);
-                    if (!from || !to) return null;
-                    return (
-                      <g key={`${edge.from}-${edge.to}`}>
-                        <line
-                          x1={from.x}
-                          y1={from.y}
-                          x2={to.x}
-                          y2={to.y}
-                          stroke="hsl(var(--muted-foreground) / 0.2)"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                        />
-                        <line
-                          className="board-edge-flow"
-                          x1={from.x}
-                          y1={from.y}
-                          x2={to.x}
-                          y2={to.y}
-                          stroke="hsl(var(--muted-foreground) / 0.68)"
-                          strokeWidth="0.95"
-                          strokeDasharray="3.1 3.1"
-                          strokeLinecap="round"
-                          markerEnd="url(#board-route-arrow)"
-                        />
-                      </g>
-                    );
-                  })}
+                  {relationshipEdgeLines}
+                  {boardRouteLines}
                 </svg>
 
-                {boardTiles.map((tile) => (
-                  <div
-                    key={tile.id}
-                    className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
-                    style={{ left: `${tile.x}%`, top: `${tile.y}%` }}
-                  >
-                    {(() => {
-                      const visual = tileVisual(tile.id);
-                      const TileIcon = visual.icon;
-                      const intensity = tileActivity[tile.id] ?? 0;
-                      const pulsed = pulsedTileIds.includes(tile.id);
-                      return (
-                        <div className="relative w-28">
-                          <span
-                            className={`pointer-events-none absolute left-1/2 top-[48%] h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl ${pulsed ? "tile-ping" : ""}`}
-                            style={{
-                              backgroundColor: visual.glowColor,
-                              opacity: pulsed ? 0.95 : Math.min(0.54, 0.2 + intensity * 0.12),
-                            }}
-                          />
-                          <span
-                            className="pointer-events-none absolute left-1/2 top-[48%] h-20 w-20 -translate-x-1/2 -translate-y-1/2 rounded-full border border-border/45"
-                            style={{
-                              boxShadow: intensity > 0 ? `0 0 0 1px ${visual.glowColor}, 0 0 24px ${visual.glowColor}` : undefined,
-                              opacity: intensity > 0 ? Math.min(0.88, 0.36 + intensity * 0.18) : 0,
-                            }}
-                          />
-                          <div className="relative mx-auto mb-1 flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-border/90 bg-card/95 shadow-[0_7px_14px_rgba(0,0,0,0.18)]">
-                            <div className={`absolute inset-x-0 top-0 h-1 ${visual.accentClass}`} />
-                            <TileIcon className={`relative h-5 w-5 ${visual.iconClass}`} />
-                          </div>
-                          <div className="rounded-md border border-border/80 bg-card px-2 py-1.5 text-card-foreground shadow-sm">
-                            <p className="line-clamp-1 text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-foreground">
-                                {tile.name}
-                            </p>
-                            <div className="mt-1 flex items-center justify-center gap-1">
-                              <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] ${visual.effectToneClass}`}>
-                                {zoneSummary(tile.id)}
-                              </span>
-                            </div>
-                            <div className="mt-1.5 flex gap-0.5">
-                              {Array.from({ length: visual.blocks }).map((_, idx) => (
-                                <span
-                                  key={`${tile.id}-b-${idx}`}
-                                  className="h-1.5 flex-1 rounded-[2px] border border-border/70 bg-muted"
-                                />
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                ))}
+                {boardTileNodes}
 
                 <div className="pointer-events-none absolute inset-0 rounded-[18px] border border-white/35" />
 
-                {agents.map((agent) => {
-                  const isSelected = agent.id === selectedAgentId;
-                  const tokenMotionClass = boardTokenTone(agent.status);
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      onClick={() => setSelectedAgentId(agent.id)}
-                      className="absolute -translate-x-1/2 -translate-y-1/2 transition-[left,top,transform] duration-700 ease-out hover:scale-105"
-                      style={{ left: `${agent.x}%`, top: `${agent.y}%` }}
-                      title={`${agent.name}: ${boardStatusBubble(agent)}`}
-                    >
-                      <span
-                        className={`inline-flex rounded-full border-2 bg-card/95 p-0.5 shadow-lg ${tokenMotionClass} ${isSelected ? "ring-2 ring-primary/70" : ""}`}
-                        style={{ borderColor: agent.color }}
-                      >
-                        <PersonaAvatar personaId={agent.id} name={agent.name} size={28} />
-                      </span>
-                      <span
-                        className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-card px-1.5 py-0.5 text-[9px] font-medium text-foreground shadow-sm"
-                        style={{ borderColor: `${agent.color}66` }}
-                      >
-                        {boardStatusBubble(agent)}
-                      </span>
-                    </button>
-                  );
-                })}
+                {boardAgentNodes}
               </div>
             </div>
 
@@ -2003,7 +2069,7 @@ export function DeepSimulationSection() {
           </div>
         </main>
 
-        <aside className="flex h-full min-h-0 min-w-0 flex-col rounded-2xl border border-border bg-card/85 p-4">
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card/85 p-4">
           <div className="mb-3 flex items-center justify-between">
             <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Strategist Swarm</p>
             <Badge className="border border-border bg-secondary text-secondary-foreground">{agents.length}</Badge>
@@ -2013,12 +2079,12 @@ export function DeepSimulationSection() {
             <p className="text-[11px] uppercase tracking-[0.13em] text-muted-foreground">Scoreboard</p>
             <div className="mt-2 space-y-1.5">
               {sortedAgents.map((agent, idx) => (
-                <div key={`rank-${agent.id}`} className="flex items-center justify-between rounded-md border border-border bg-card/85 px-2 py-1.5 text-xs">
-                  <span className="inline-flex items-center gap-1.5 text-foreground">
+                <div key={`rank-${agent.id}`} className="flex items-center justify-between gap-2 rounded-md border border-border bg-card/85 px-2 py-1.5 text-xs">
+                  <span className="inline-flex min-w-0 items-center gap-1.5 text-foreground">
                     <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[10px]">{idx + 1}</span>
                     <PersonaAvatar personaId={agent.id} name={agent.name} size={18} />
                     <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: agent.color }} />
-                    {agent.name}
+                    <span className="truncate">{agent.name}</span>
                   </span>
                   <span className="font-semibold" style={{ color: agent.color }}>{agent.score.toFixed(2)}</span>
                 </div>

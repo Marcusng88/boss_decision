@@ -692,11 +692,8 @@ class DeepSimulationEngine:
                 self.state,
                 f"Day {tick}: strategists rolled, moved districts, and are planning actions.",
             )
-            yield world_event(self.state)
             self._set_phase("observe")
-            yield world_event(self.state)
             self._set_phase("action")
-            yield world_event(self.state)
 
             candidate_intents: list[ActionIntent] = []
             for persona in personas:
@@ -750,10 +747,8 @@ class DeepSimulationEngine:
                         message = f"{persona.name} completed day-{tick} reaction."
                         self._record_timeline(tick, message, source=f"subagent:{persona.id}")
                         yield timeline_event(tick, message)
-                        yield world_event(self.state)
 
             self._set_phase("resolution")
-            yield world_event(self.state)
             resolved = resolve_conflicts(candidate_intents, self.state.personas)
             accepted, rejections = self._apply_resolved_intents(tick, resolved)
             self.state.resolved_actions = [
@@ -781,7 +776,6 @@ class DeepSimulationEngine:
             self._apply_zone_effects(tick, active_ids)
             crisis = self._run_crisis_phase(tick, resolved)
             self._set_phase("scoring")
-            yield world_event(self.state)
             self._award_points(tick, active_ids, rolls, resolved, kpi_before, crisis)
             if resolved:
                 self._record_timeline(tick, f"Applied {len(resolved)} resolved intent(s).", source="engine")
@@ -807,7 +801,6 @@ class DeepSimulationEngine:
                 },
             )
             yield tick_event_to_stream(world_delta_event)
-            yield world_event(self.state)
 
             kpi_event = self._record_tick_event(
                 tick=tick,
@@ -816,6 +809,7 @@ class DeepSimulationEngine:
                 payload=self.state.global_kpis.model_dump(),
             )
             yield tick_event_to_stream(kpi_event)
+            yield world_event(self.state)
 
             if tick % self.request.summary_cadence_ticks == 0:
                 periodic = build_periodic_summary(self.state, self.orchestrator.observer_model)
