@@ -69,8 +69,20 @@ class SalesCampaignRequest(BaseModel):
     region: Optional[str] = Field(default="Malaysia", max_length=80)
 
 
+class DeepSimulatorRequest(BaseModel):
+    """Request model for deep 2D simulator execution."""
+
+    query: str
+    max_ticks: int = 5
+    seed: Optional[int] = None
+    scenario_id: str = "pricing_war_v1"
+    min_personas: int = 3
+    max_personas: int = 6
+    summary_cadence_ticks: int = 7
+
+
 def _ensure_simulator_import_path() -> None:
-    simulator_root = Path(__file__).resolve().parent / "simulator_agent_umh26"
+    simulator_root = Path(__file__).resolve().parent / "simulator_agent"
     simulator_root_str = str(simulator_root)
     if simulator_root_str not in sys.path:
         sys.path.insert(0, simulator_root_str)
@@ -78,9 +90,23 @@ def _ensure_simulator_import_path() -> None:
 
 def _get_simulator_agent():
     _ensure_simulator_import_path()
-    from simulator_agent_umh26.src import agent as simulator_agent
+    from simulator_agent.src import agent as simulator_agent
 
     return simulator_agent
+
+
+def _ensure_deep_simulator_import_path() -> None:
+    backend_root = Path(__file__).resolve().parent
+    backend_root_str = str(backend_root)
+    if backend_root_str not in sys.path:
+        sys.path.insert(0, backend_root_str)
+
+
+def _get_deep_simulator_agent():
+    _ensure_deep_simulator_import_path()
+    from deep_simulation_agent.src import agent as deep_simulator_agent
+
+    return deep_simulator_agent
 
 
 def _build_simulator_initial_state(request: SimulatorRequest) -> dict[str, Any]:
@@ -92,6 +118,18 @@ def _build_simulator_initial_state(request: SimulatorRequest) -> dict[str, Any]:
         "persona_results": [],
         "persona_stream_events": [],
         "scenario_branches": [],
+    }
+
+
+def _build_deep_simulator_initial_state(request: DeepSimulatorRequest) -> dict[str, Any]:
+    return {
+        "query": request.query,
+        "max_ticks": request.max_ticks,
+        "seed": request.seed,
+        "scenario_id": request.scenario_id,
+        "min_personas": request.min_personas,
+        "max_personas": request.max_personas,
+        "summary_cadence_ticks": request.summary_cadence_ticks,
     }
 
 
@@ -300,6 +338,39 @@ async def stream_simulator(request: SimulatorRequest):
         except Exception as e:
             yield _ndjson_line({"type": "error", "error": str(e)})
         finally:
+            yield _ndjson_line({"type": "done"})
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/deep-simulator/run")
+async def run_deep_simulator(request: DeepSimulatorRequest):
+    """
+    Execute deep 2D simulator and return final result in one response.
+    """
+    try:
+        deep_simulator_agent = _get_deep_simulator_agent()
+        initial_state = _build_deep_simulator_initial_state(request)
+        result = await asyncio.to_thread(deep_simulator_agent.invoke, initial_state)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Deep simulator run failed: {str(e)}")
+
+
+@app.post("/api/deep-simulator/stream")
+async def stream_deep_simulator(request: DeepSimulatorRequest):
+    """
+    Stream deep simulator world updates and subagent chunks as NDJSON.
+    """
+    deep_simulator_agent = _get_deep_simulator_agent()
+    initial_state = _build_deep_simulator_initial_state(request)
+
+    async def event_stream():
+        try:
+            async for event in deep_simulator_agent.astream(initial_state):
+                yield _ndjson_line(_safe_json_payload(event))
+        except Exception as e:
+            yield _ndjson_line({"type": "error", "error": str(e)})
             yield _ndjson_line({"type": "done"})
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
