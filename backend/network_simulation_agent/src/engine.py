@@ -316,7 +316,7 @@ class NetworkSimulationEngine:
                 actor = node_lookup.get(actor_id)
                 if actor is None:
                     continue
-                action_payload, node_narrative = self.orchestrator.build_node_turn(
+                action_payload, node_narrative = await self.orchestrator.build_node_turn(
                     tick=tick,
                     node=actor,
                     nodes=self.nodes,
