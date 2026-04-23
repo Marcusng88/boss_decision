@@ -4,9 +4,16 @@ Marketing Agent - Evaluates campaign performance and market messaging impact.
 from typing import Dict, List, Any
 
 from .base_agent import BaseAgent, AgentInsight
+from services.tavily_service import TavilyService
+from services.newsdata_service import NewsDataService
 
 
 class MarketingAgent(BaseAgent):
+    def __init__(self, db_service, llm=None):
+        super().__init__(db_service, llm)
+        self.tavily = TavilyService()
+        self.news = NewsDataService()
+
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         evidence: List[Dict[str, Any]] = []
 
@@ -16,16 +23,53 @@ class MarketingAgent(BaseAgent):
         except Exception:
             pass
 
-        if context.get("document_summary"):
+        # If an uploaded document is available, include it as evidence
+        doc_summary = context.get("document_summary")
+        if doc_summary:
             evidence.append(
                 {
                     "source": "uploaded_document",
                     "path": context.get("document_path", "(runtime_upload)"),
                     "department": context.get("document_department", "unknown"),
-                    "summary": context.get("document_summary"),
+                    "summary": doc_summary,
                     "tags": context.get("document_tags", []),
                 }
             )
+
+        # Always run Tavily web search — use document summary if present, else the raw query
+        tavily_search_term = (
+            f"competitors and market analysis for: {doc_summary[:200]}"
+            if doc_summary
+            else f"market analysis and competitor landscape: {query[:200]}"
+        )
+        try:
+            web_results = await self.tavily.search(tavily_search_term, max_results=3)
+            for result in web_results:
+                evidence.append({
+                    "source": "tavily_search",
+                    "title": result.get("title", "Web Result"),
+                    "url": result.get("url"),
+                    "summary": result.get("content"),
+                    "type": "competitor_data"
+                })
+        except Exception:
+            pass
+
+        # Always run NewsData search — use document summary if present, else the raw query
+        news_search_term = doc_summary[:150] if doc_summary else query[:150]
+        try:
+            news_results = await self.news.get_latest_news(news_search_term)
+            for article in news_results:
+                evidence.append({
+                    "source": "newsdata_io",
+                    "title": article.get("title"),
+                    "url": article.get("link"),
+                    "summary": article.get("description"),
+                    "pub_date": article.get("pubDate"),
+                    "type": "market_news"
+                })
+        except Exception:
+            pass
 
         return evidence
 
@@ -96,7 +140,8 @@ class MarketingAgent(BaseAgent):
             domain_role="marketing performance and campaign strategy analyst",
             domain_focus=(
                 "Campaign ROI, audience segmentation effectiveness, channel performance, "
-                "conversion rates, brand positioning, and budget allocation recommendations."
+                "conversion rates, brand positioning, competitor market data, and budget allocation recommendations. "
+                "Benchmarking internal strategy against real-time web data and recent news pulses."
             ),
             fallback_insight=fallback,
         )

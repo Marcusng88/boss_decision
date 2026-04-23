@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Brain, AlertTriangle } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { InputPanel } from "@/components/decision/InputPanel";
 import { FinalDecision } from "@/components/decision/FinalDecision";
 import { analyzeDecision, AnalysisResult, ChatMessage } from "@/lib/decision-engine";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 const Index = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -41,7 +41,6 @@ const Index = () => {
     targetType?: string;
     targetId?: number;
     allowMockFallback: boolean;
-    document?: File;
   }) => {
     setIsAnalyzing(true);
     setError("");
@@ -52,7 +51,6 @@ const Index = () => {
         targetType: payload.targetType,
         targetId: payload.targetId,
         allowMockFallback: payload.allowMockFallback,
-        document: payload.document,
       });
       setResult(analyzed);
     } catch (e) {
@@ -81,10 +79,9 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-subtle relative overflow-x-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-70 bg-[radial-gradient(circle_at_12%_12%,hsl(195_92%_78%/.35),transparent_35%),radial-gradient(circle_at_90%_18%,hsl(217_91%_64%/.28),transparent_30%),radial-gradient(circle_at_58%_85%,hsl(188_78%_66%/.20),transparent_38%)]" />
-      <header className="border-b border-border bg-card/60 backdrop-blur-sm sticky top-0 z-10">
-        <div className="container max-w-7xl py-4 flex items-center justify-between">
+    <div className="min-h-screen bg-gradient-subtle flex flex-col items-center">
+      <header className="border-b border-border bg-card/60 backdrop-blur-sm sticky top-0 z-10 w-full">
+        <div className="container max-w-7xl px-4 md:px-6 py-4 flex items-center justify-between mx-auto">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-primary flex items-center justify-center shadow-glow">
               <Brain className="w-5 h-5 text-primary-foreground" />
@@ -105,8 +102,8 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="container max-w-7xl py-8 relative z-[1]">
-        <div className="grid lg:grid-cols-[360px_1fr] gap-6">
+      <main className="container max-w-7xl px-4 md:px-6 py-8 mx-auto">
+        <div className="grid lg:grid-cols-[360px_1fr] gap-6 w-full">
           <InputPanel onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} />
 
           <div className="space-y-5 min-w-0">
@@ -153,7 +150,7 @@ const Index = () => {
                     {shownChat.map((msg) => (
                       <div key={msg.id} className={`max-w-[80%] rounded-2xl px-4 py-3 text-left ${bubbleClass(msg.actor)}`}>
                         <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75 mb-1">{msg.label}</p>
-                        <div className={`prose prose-sm max-w-none leading-relaxed ${msg.actor === 'user' ? 'prose-invert text-primary-foreground' : 'dark:prose-invert text-foreground'}`}>
+                        <div className="text-sm leading-relaxed prose prose-sm max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:bg-muted prose-pre:text-muted-foreground">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
                         </div>
                       </div>

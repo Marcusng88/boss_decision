@@ -145,8 +145,12 @@ Return a single JSON object:
                 confidence=max(0.0, min(confidence, 1.0)),
                 evidence_used=fallback_insight.evidence_used,
             )
-        except Exception:
-            # LLM unavailable or parse failed — return the rule-based fallback silently
+        except Exception as e:
+            # Import logging here to avoid potential circular imports
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"LLM subagent analysis failed for {domain_role}: {str(e)}")
+            # LLM unavailable or parse failed — return the rule-based fallback
             return fallback_insight
 
     async def run(self, query: str, context: Dict[str, Any]) -> AgentInsight:

@@ -140,7 +140,6 @@ async def llm_health_check():
         return {
             "status": "healthy",
             "llm_model": client.model,
-            "llm_endpoint": client.base_url,
             "llm_response": (response.text or "")[:40],
         }
     except Exception as exc:
@@ -149,7 +148,7 @@ async def llm_health_check():
             detail={
                 "status": "unhealthy",
                 "llm_model": client.model,
-                "llm_endpoint": client.base_url,
+                "llm_endpoint_candidates": client.endpoint_candidates,
                 "error": str(exc),
             },
         )
@@ -277,7 +276,7 @@ async def _run_analysis(
         "target_id": target_id,
         "context": context,
         "submitted_by": submitted_by,
-        "force_simple_llm_subagents": True,
+        "force_simple_llm_subagents": False,
         "knowledge_paths": {
             "entities": str(knowledge.entities_dir),
             "relationships": str(knowledge.relationship_dir),

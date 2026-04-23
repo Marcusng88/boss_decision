@@ -18,7 +18,7 @@ class ManagerAgent:
         self.llm = llm
         self.agent_registry = self._build_agent_registry(agents)
         self.router_client = UnifiedLLMClient.from_settings()
-        self.router_init_error = None if self.router_client else "API key not configured"
+        self.router_init_error = None if self.router_client else "GOOGLE_API_KEY not configured"
         self.supported_departments = [
             "hr",
             "sales",
@@ -201,7 +201,12 @@ Output JSON schema:
             selected = ["hr", "legal"]
 
         if not selected:
-            selected = ["hr", "sales"]
+            # Check for marketing keywords as a last resort before hard fallback
+            lowered_query = query.lower()
+            if any(k in lowered_query for k in ["marketing", "brand", "coffee", "business", "market", "campaign"]):
+                selected = ["marketing"]
+            else:
+                selected = ["hr", "sales"]
 
         return {
             "selected_agents": selected,
@@ -220,7 +225,7 @@ Output JSON schema:
                 agent_name=label,
                 findings=[f"{label} agent selected but LLM client is unavailable."],
                 risks=["Sub-agent analysis is degraded due to missing LLM configuration."],
-                recommendation=f"Configure an API key to enable dynamic {label} analysis.",
+                recommendation=f"Configure GOOGLE_API_KEY to enable dynamic {label} analysis.",
                 confidence=0.3,
                 evidence_used=[{"source": "manager_router", "detail": "llm_not_configured"}],
             )
@@ -262,7 +267,7 @@ Return JSON only:
                 confidence=max(0.0, min(confidence, 1.0)),
                 evidence_used=[
                     {
-                        "source": "unified_llm",
+                        "source": "gemini_llm",
                         "detail": f"dynamic_sub_agent_{department}",
                     }
                 ],
@@ -341,7 +346,7 @@ Return JSON only:
         """Dynamically route and execute selected agents with manager TLDR output."""
         routing = await self.route_agents(query, context)
         selected_names: List[str] = routing.get("selected_agents", [])
-        force_simple_llm = bool(context.get("force_simple_llm_subagents", True))
+        force_simple_llm = bool(context.get("force_simple_llm_subagents", False))
 
         agent_insights: List[AgentInsight] = []
         for name in selected_names:
