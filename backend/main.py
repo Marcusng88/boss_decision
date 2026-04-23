@@ -173,28 +173,42 @@ async def upload_document(
     Flow:
     1. Upload file to Cloudinary
     2. Create source_document record
-    3. Extract data with Gemini (document_service.py)
+    3. Extract data with Zhipu GLM (document_service.py)
     4. Write data to appropriate tables with Zhipu AI (data_writer_agent.py)
     
     Args:
         file: Document file to upload
         custom_extraction: Optional user-requested data to extract (will use ai_justification if not standard column)
     """
+    print("\n" + "="*80)
+    print("DOCUMENT UPLOAD PIPELINE STARTED")
+    print("="*80)
+    print(f"File: {file.filename}")
+    print(f"Custom extraction requested: {custom_extraction if custom_extraction else 'None'}")
+    print()
+    
     try:
         # Validate file type
+        print("[STEP 0] Validating file type...")
         allowed_extensions = {'.pdf', '.doc', '.docx', '.txt', '.md', '.png', '.jpg', '.jpeg', '.xlsx', '.csv'}
         file_ext = os.path.splitext(file.filename)[1].lower()
         
         if file_ext not in allowed_extensions:
+            print(f"[STEP 0] FAILED - Unsupported file type: {file_ext}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
             )
         
+        print(f"[STEP 0] SUCCESS - File type validated: {file_ext}")
+        
         # Read file content
         file_content = await file.read()
+        print(f"[STEP 0] File read successfully, size: {len(file_content)} bytes")
+        print()
         
         # Step 1: Upload to Cloudinary
+        print("[STEP 1] CLOUDINARY UPLOAD - Starting upload to Cloudinary...")
         from services.cloudinary_service import get_cloudinary_service
         
         cloudinary_service = get_cloudinary_service()
@@ -206,11 +220,16 @@ async def upload_document(
         )
         
         if not upload_result["success"]:
+            print(f"[STEP 1] FAILED - Cloudinary upload error: {upload_result.get('error')}")
             raise HTTPException(status_code=500, detail=f"Upload failed: {upload_result.get('error')}")
         
         file_url = upload_result["url"]
+        print(f"[STEP 1] SUCCESS - File uploaded to Cloudinary")
+        print(f"         URL: {file_url}")
+        print()
         
         # Step 2: Generate next source_id
+        print("[STEP 2] SOURCE DOCUMENT - Creating source_document record...")
         max_id_result = db.client.table("source_document")\
             .select("source_id")\
             .order("source_id", desc=True)\
@@ -221,6 +240,8 @@ async def upload_document(
             source_id = max_id_result.data[0]["source_id"] + 1
         else:
             source_id = 501  # Start from 501 if no records exist
+        
+        print(f"         Generated source_id: {source_id}")
         
         # Step 3: Create source_document record
         source_doc_data = {
@@ -237,9 +258,14 @@ async def upload_document(
             .execute()
         
         if not result.data:
+            print("[STEP 2] FAILED - Could not insert source_document record")
             raise HTTPException(status_code=500, detail="Failed to create source document record")
         
-        # Step 4: Extract data with Zhipu AI
+        print(f"[STEP 2] SUCCESS - source_document record created (ID: {source_id})")
+        print()
+        
+        # Step 3: Extract data with document_service (Gemini AI)
+        print("[STEP 3] DOCUMENT EXTRACTION - Starting AI extraction with Google Gemini...")
         extraction_json = None
         doc_type = "Unknown"
         
@@ -249,18 +275,35 @@ async def upload_document(
                 temp_file.write(file_content)
                 temp_file_path = temp_file.name
             
+            print(f"         Temp file created: {temp_file_path}")
+            
             try:
                 from services.document_service import DocumentIngestor
                 
                 document_ingestor = DocumentIngestor()
+                print("         Calling document_service.process()...")
                 extraction_json = document_ingestor.process(temp_file_path)
                 doc_type = extraction_json.get("document_type", "Unknown")
+                
+                print(f"[STEP 3] SUCCESS - Document extracted")
+                print(f"         Document Type: {doc_type}")
+                print(f"         Department: {extraction_json.get('department', 'N/A')}")
+                print(f"         Entities extracted: {len(extraction_json.get('entities', []))}")
+                
+                # If no entities, show full extraction JSON for debugging
+                if len(extraction_json.get('entities', [])) == 0:
+                    print(f"         ⚠️  WARNING: No entities found!")
+                    print(f"         Full extraction JSON:")
+                    import json
+                    print(f"         {json.dumps(extraction_json, indent=10)[:1000]}")
+                print()
             finally:
                 # Clean up temp file
                 if os.path.exists(temp_file_path):
                     os.unlink(temp_file_path)
             
             # Update source_document with extracted doc_type
+            print(f"         Updating source_document with doc_type: {doc_type}")
             db.client.table("source_document")\
                 .update({
                     "doc_type": doc_type,
@@ -268,25 +311,56 @@ async def upload_document(
                 })\
                 .eq("source_id", source_id)\
                 .execute()
+            print(f"         source_document updated successfully")
+            print()
             
         except Exception as e:
             # Extraction failed, but document is uploaded
-            print(f"Warning: Document extraction failed: {str(e)}")
+            print(f"[STEP 3] FAILED - Document extraction error:")
+            print(f"         Error: {str(e)}")
             import traceback
+            print(f"         Traceback:")
             print(traceback.format_exc())
+            print()
             extraction_json = None
         
-        # Step 5: Write extracted data to database with Zhipu AI (only if extraction succeeded)
+        # Step 4 & 5: Write extracted data to database with data_writer_agent (Zhipu AI)
         if extraction_json:
+            print("[STEP 4-5] DATA WRITER AGENT - Starting intelligent SQL generation and database write...")
             try:
                 from services.data_writer_agent import get_data_writer_agent
                 
                 data_writer = get_data_writer_agent()
+                print("         Calling data_writer.process_document_extraction()...")
                 write_result = data_writer.process_document_extraction(
                     extraction_json=extraction_json,
                     source_id=source_id,
                     custom_extraction=custom_extraction
                 )
+                
+                if write_result["success"]:
+                    print(f"[STEP 4-5] SUCCESS - Data written to database")
+                    print(f"           Rows inserted: {write_result.get('execution_results', {}).get('rows_inserted', 0)}")
+                    print()
+                    print("="*80)
+                    print("PIPELINE COMPLETED SUCCESSFULLY")
+                    print("="*80)
+                    print()
+                else:
+                    print(f"[STEP 4-5] PARTIAL FAILURE - Data write had issues")
+                    exec_results = write_result.get('execution_results', {})
+                    error_msg = exec_results.get('error') or write_result.get('error', 'Unknown error')
+                    print(f"           Error: {error_msg}")
+                    print(f"           Rows inserted: {exec_results.get('rows_inserted', 0)}/{exec_results.get('total_statements', 0)} statements")
+                    
+                    # Show failed statement details
+                    failed_details = [d for d in exec_results.get('details', []) if not d.get('success', False)]
+                    if failed_details:
+                        print(f"           Failed statements:")
+                        for detail in failed_details[:3]:  # Show up to 3 failures
+                            print(f"             - {detail.get('statement', 'N/A')[:80]}...")
+                            print(f"               Error: {detail.get('error', 'N/A')}")
+                    print()
                 
                 return {
                     "success": write_result["success"],
@@ -294,13 +368,24 @@ async def upload_document(
                     "file_url": file_url,
                     "doc_type": doc_type,
                     "department": extraction_json.get("department"),
-                    "extraction_status": "completed" if write_result["success"] else "failed",
+                    "extraction_status": "completed",
                     "data_written": write_result.get("execution_results", {}).get("rows_inserted", 0),
                     "details": write_result
                 }
             
             except Exception as e:
                 # Data writing failed, but extraction succeeded
+                print(f"[STEP 4-5] FAILED - Data writer agent error:")
+                print(f"           Error: {str(e)}")
+                import traceback
+                print(f"           Traceback:")
+                print(traceback.format_exc())
+                print()
+                print("="*80)
+                print("PIPELINE FAILED AT DATA WRITING STEP")
+                print("="*80)
+                print()
+                
                 return {
                     "success": False,
                     "source_id": source_id,
@@ -313,13 +398,21 @@ async def upload_document(
                 }
         else:
             # No extraction - just return upload success
+            print("[STEP 3] WARNING - Extraction failed or was skipped")
+            print("         Returning upload-only success (no data extraction/writing)")
+            print()
+            print("="*80)
+            print("PIPELINE COMPLETED WITH WARNINGS (extraction skipped)")
+            print("="*80)
+            print()
+            
             return {
                 "success": True,
                 "source_id": source_id,
                 "file_url": file_url,
                 "doc_type": doc_type,
                 "extraction_status": "skipped",
-                "message": "Document uploaded successfully. AI extraction skipped (no Google API key configured)."
+                "message": "Document uploaded successfully. AI extraction skipped or failed."
             }
     
     except HTTPException:
@@ -397,7 +490,7 @@ async def get_document(source_id: int):
         related_records = {}
         
         # Check each table for records linked to this source_id
-        tables = ["hr_record", "sales_record", "finance_record", "marketing_record", "supply_record", "legal_record"]
+        tables = ["hr_record", "sales_record", "finance_record", "marketing_record", "supply_record", "legal_policy"]
         
         for table in tables:
             try:
