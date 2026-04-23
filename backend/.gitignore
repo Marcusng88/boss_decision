@@ -33,3 +33,5 @@ build/
 # Database (if using local PostgreSQL dumps)
 *.sql.backup
 *.dump
+
+runs/

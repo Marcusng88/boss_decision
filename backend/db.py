@@ -61,6 +61,26 @@ class DatabaseService:
         
         response = query.execute()
         return response.data
+
+    async def get_supply_record(self, supply_id: int):
+        """Get one supply record by supply_id."""
+        response = self.client.table('supply_record') \
+            .select('*') \
+            .eq('supply_id', supply_id) \
+            .limit(1) \
+            .execute()
+
+        records = response.data or []
+        return records[0] if records else None
+
+    async def get_supply_records_below_inventory(self, threshold: int = 1000):
+        """Get supply records with inventory level below the given threshold."""
+        response = self.client.table('supply_record') \
+            .select('*') \
+            .lt('inventory_level', threshold) \
+            .order('inventory_level', desc=False) \
+            .execute()
+        return response.data
     
     async def get_case_evidence(self, case_id: int):
         """Get all evidence linked to a decision case."""

@@ -9,6 +9,7 @@ import SalesAgent from "./pages/SalesAgent.tsx";
 import SimulationLive from "./pages/SimulationLive.tsx";
 import SupplyChainAgent from "./pages/SupplyChainAgent.tsx";
 import DeepSimulationLive from "./pages/DeepSimulationLive.tsx";
+import NetworkSimulationLive from "./pages/NetworkSimulationLive.tsx";
 
 const queryClient = new QueryClient();
 
@@ -24,6 +25,7 @@ const App = () => (
           <Route path="/agents/sales" element={<SalesAgent />} />
           <Route path="/agents/supply-chain" element={<SupplyChainAgent />} />
           <Route path="/simulation-deep" element={<DeepSimulationLive />} />
+          <Route path="/simulation-network" element={<NetworkSimulationLive />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
