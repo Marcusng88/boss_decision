@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     
     # LLM Configuration
     openai_api_key: str | None = None
+    tavily_api_key: str | None = None
     llm_model: str = "gpt-4"
     llm_temperature: float = 0.7
     

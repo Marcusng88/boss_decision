@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Brain, Radar, Sparkles } from "lucide-react";
+import { ArrowUpRight, Brain, Radar, Sparkles, TrendingUp, Truck } from "lucide-react";
+import { Link } from "react-router-dom";
 import { InputPanel } from "@/components/decision/InputPanel";
 import { DataRetrieved } from "@/components/decision/DataRetrieved";
 import { AgentInsights } from "@/components/decision/AgentInsights";
@@ -98,6 +99,50 @@ const Index = () => {
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="mb-8 grid gap-4 md:grid-cols-2">
+          <Link
+            to="/agents/sales"
+            className="group relative overflow-hidden rounded-[1.6rem] border border-border bg-card/80 p-5 shadow-card transition-all duration-300 hover:-translate-y-1 hover:border-primary/40"
+          >
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_90%_5%,hsl(var(--primary)/0.18),transparent_32%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+            <div className="relative">
+              <p className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/80 px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                <TrendingUp className="h-3.5 w-3.5 text-primary" />
+                Sales Agent
+              </p>
+              <h3 className="mt-4 text-2xl leading-tight text-foreground">Revenue command center</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Explore pipeline health, conversion pressure, and deal velocity with a specialist sales lens.
+              </p>
+              <div className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-foreground">
+                Open Sales Agent
+                <ArrowUpRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              </div>
+            </div>
+          </Link>
+
+          <Link
+            to="/agents/supply-chain"
+            className="group relative overflow-hidden rounded-[1.6rem] border border-border bg-card/80 p-5 shadow-card transition-all duration-300 hover:-translate-y-1 hover:border-accent/50"
+          >
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,hsl(var(--accent)/0.18),transparent_34%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+            <div className="relative">
+              <p className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/80 px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                <Truck className="h-3.5 w-3.5 text-accent-foreground" />
+                Supply Chain Agent
+              </p>
+              <h3 className="mt-4 text-2xl leading-tight text-foreground">Operational resilience cockpit</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Review lead-time volatility, supplier risk, and inventory balance before operations decisions.
+              </p>
+              <div className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-foreground">
+                Open Supply Chain Agent
+                <ArrowUpRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              </div>
+            </div>
+          </Link>
         </section>
 
         <div className="grid lg:grid-cols-[350px_1fr] gap-6">

@@ -5,7 +5,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Index from "./pages/Index.tsx";
 import NotFound from "./pages/NotFound.tsx";
+import SalesAgent from "./pages/SalesAgent.tsx";
 import SimulationLive from "./pages/SimulationLive.tsx";
+import SupplyChainAgent from "./pages/SupplyChainAgent.tsx";
 
 const queryClient = new QueryClient();
 
@@ -18,6 +20,8 @@ const App = () => (
         <Routes>
           <Route path="/" element={<Index />} />
           <Route path="/simulation-live" element={<SimulationLive />} />
+          <Route path="/agents/sales" element={<SalesAgent />} />
+          <Route path="/agents/supply-chain" element={<SupplyChainAgent />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

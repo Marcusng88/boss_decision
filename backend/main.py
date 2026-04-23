@@ -9,12 +9,13 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Optional
 import uvicorn
 
 from config import get_settings
 from db import DatabaseService
+from services.sales_campaign_service import SalesCampaignService
 
 # Initialize settings
 settings = get_settings()
@@ -59,6 +60,13 @@ class SimulatorRequest(BaseModel):
     structured_data: Optional[dict[str, Any]] = None
     documents: Optional[list[str]] = None
     business_context: Optional[dict[str, Any]] = None
+
+
+class SalesCampaignRequest(BaseModel):
+    """Request model for Tavily-powered sales campaign suggestions."""
+
+    product: str = Field(..., min_length=2, max_length=120)
+    region: Optional[str] = Field(default="Malaysia", max_length=80)
 
 
 def _ensure_simulator_import_path() -> None:
@@ -197,6 +205,32 @@ async def analyze_query(request: AnalyzeRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+@app.post("/api/sales/campaign-suggestions")
+async def get_sales_campaign_suggestions(request: SalesCampaignRequest):
+    """
+    Suggest campaign/event ideas for the next week based on Tavily news search.
+    """
+    product = request.product.strip()
+    region = (request.region or "Malaysia").strip() or "Malaysia"
+
+    if len(product) < 2:
+        raise HTTPException(status_code=422, detail="Product name must be at least 2 characters")
+
+    if not settings.tavily_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="TAVILY_API_KEY is not configured. Add it to backend/.env first.",
+        )
+
+    service = SalesCampaignService(settings.tavily_api_key)
+
+    try:
+        result = await service.suggest_campaigns(product=product, region=region)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sales suggestion failed: {str(e)}")
 
 
 @app.post("/api/simulator/run")
