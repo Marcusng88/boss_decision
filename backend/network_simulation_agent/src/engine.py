@@ -217,6 +217,22 @@ class NetworkSimulationEngine:
             "recommended strategy is phased rollout with supplier negotiation and retention messaging."
         )
 
+    def _day_summary_from_narratives(self, tick: int, tick_narratives: list[dict[str, str]]) -> str:
+        """Build a plain-language day summary grounded in node LLM narratives for the current tick."""
+        if not tick_narratives:
+            return f"Day {tick}: no major agent actions were recorded."
+
+        headline = tick_narratives[0].get("headline", "").strip() or "Agents reacted to market conditions."
+        snippets: list[str] = []
+        for item in tick_narratives[:3]:
+            label = item.get("label", "Node").strip()
+            summary = item.get("summary_short", "").strip()
+            if summary:
+                snippets.append(f"{label}: {summary}")
+        if not snippets:
+            return f"Day {tick}: {headline}"
+        return f"Day {tick}: {headline} Key moves: " + " | ".join(snippets)
+
     async def run_stream(self) -> AsyncIterator[dict[str, Any]]:
         """Run simulation tick loop and stream lifecycle/action/state events."""
         header = make_event(
@@ -244,6 +260,7 @@ class NetworkSimulationEngine:
             progress["session_id"] = self.session_id
             self._append_event(progress, tick=tick)
             yield progress
+            tick_narratives: list[dict[str, str]] = []
 
             for shock in SESSION_STORE.pop_shocks(self.session_id):
                 self._apply_shock(shock)
@@ -309,6 +326,13 @@ class NetworkSimulationEngine:
                 )
                 self._append_event(message_event, tick=tick)
                 yield message_event
+                tick_narratives.append(
+                    {
+                        "label": str(actor.get("label", actor_id)),
+                        "headline": str(node_narrative.get("headline", "")),
+                        "summary_short": str(node_narrative.get("summary_short", "")),
+                    }
+                )
 
                 touched_edge = self._update_edge(
                     tick=tick,
@@ -335,6 +359,7 @@ class NetworkSimulationEngine:
                     "edges": self.edges,
                     "kpis": self.kpis.copy(),
                     "llm_context": self._llm_state_digest(tick=tick),
+                    "day_summary_ai": self._day_summary_from_narratives(tick=tick, tick_narratives=tick_narratives),
                 },
             )
             self._append_event(network_state, tick=tick)

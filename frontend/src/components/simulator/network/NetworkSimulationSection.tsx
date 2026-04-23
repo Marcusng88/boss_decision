@@ -64,6 +64,14 @@ interface NodeNarrative {
   full_response_md: string;
 }
 
+interface DaySnapshot {
+  day: number;
+  nodes: NetworkNode[];
+  edges: NetworkEdge[];
+  kpis?: { revenue_delta?: number; cost_delta?: number; risk_delta?: number };
+  summary?: string;
+}
+
 const NODE_TYPE_STYLE: Record<NodeType, { color: string; ring: string }> = {
   business: { color: "#e9772e", ring: "rgba(233,119,46,0.35)" },
   consumer: { color: "#2f7f73", ring: "rgba(47,127,115,0.35)" },
@@ -94,6 +102,16 @@ const INITIAL_QUERY = "Can I increase my price by 10% without damaging retention
 const DEFAULT_DAYS = 16;
 const BUILDING_ICON_COUNT = 60;
 const PERSONA_ICON_COUNT = 49;
+const BUILDING_ICON_POOL: Record<NodeType, number[]> = {
+  business: [1, 3, 4, 20, 21, 24, 30, 36, 52, 54],
+  consumer: [2, 6, 13, 14, 15, 18, 31, 32, 45, 46, 47, 49],
+  supplier: [8, 16, 17, 25, 26, 27, 28, 29],
+  competitor: [19, 20, 21, 45, 46, 53, 54],
+  community: [2, 12, 23, 31, 41, 43, 44],
+  bank: [5, 11, 33, 35],
+  regulator: [7, 9, 10, 22, 24, 44, 50, 51],
+  platform: [33, 34, 37, 38, 39, 40],
+};
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -121,12 +139,13 @@ function personaIconPath(index: number): string {
 }
 
 function pickNodeIcons(nodeId: string, type: NodeType): { buildingIcon: string; personaIcon: string } {
-  const typeSeed = stableHash(type);
   const nodeSeed = stableHash(nodeId);
-  const buildingIndex = (typeSeed + nodeSeed) % BUILDING_ICON_COUNT;
+  const pool = BUILDING_ICON_POOL[type];
+  const buildingNumber =
+    pool.length > 0 ? pool[nodeSeed % pool.length] : (nodeSeed % BUILDING_ICON_COUNT) + 1;
   const personaIndex = nodeSeed % PERSONA_ICON_COUNT;
   return {
-    buildingIcon: buildingIconPath(buildingIndex),
+    buildingIcon: buildingIconPath(buildingNumber - 1),
     personaIcon: personaIconPath(personaIndex),
   };
 }
@@ -270,11 +289,20 @@ export function NetworkSimulationSection() {
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [nodeNarratives, setNodeNarratives] = useState<Record<string, NodeNarrative>>({});
+  const [timelineByDay, setTimelineByDay] = useState<Record<number, DaySnapshot>>({});
+  const [narrativesByDay, setNarrativesByDay] = useState<Record<number, Record<string, NodeNarrative>>>({});
+  const [replayDay, setReplayDay] = useState(0);
+  const [followLive, setFollowLive] = useState(true);
+  const [isReplayPlaying, setIsReplayPlaying] = useState(false);
 
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
 
   const streamAbortRef = useRef<AbortController | null>(null);
+  const followLiveRef = useRef(true);
+  const currentDayRef = useRef(0);
+  const nodesRef = useRef<NetworkNode[]>(nodes);
+  const narrativesByDayRef = useRef<Record<number, Record<string, NodeNarrative>>>({});
   const dragCanvasRef = useRef<{ active: boolean; startX: number; startY: number }>({
     active: false,
     startX: 0,
@@ -282,13 +310,23 @@ export function NetworkSimulationSection() {
   });
   const dragNodeRef = useRef<{ nodeId: string; pointerId: number } | null>(null);
 
-  const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-  const selectedNode = nodeMap.get(selectedNodeId) ?? nodes[0];
+  const maxReplayDay = useMemo(() => {
+    const days = Object.keys(timelineByDay).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+    return days.length > 0 ? Math.max(...days) : currentDay;
+  }, [timelineByDay, currentDay]);
+  const activeDay = followLive ? currentDay : replayDay;
+  const displaySnapshot = timelineByDay[activeDay];
+  const displayNodes = displaySnapshot?.nodes ?? nodes;
+  const displayEdges = displaySnapshot?.edges ?? edges;
+  const activeNarratives = narrativesByDay[activeDay] ?? nodeNarratives;
+
+  const nodeMap = useMemo(() => new Map(displayNodes.map((node) => [node.id, node])), [displayNodes]);
+  const selectedNode = nodeMap.get(selectedNodeId) ?? displayNodes[0];
   const dialogNode = useMemo(
     () => (activeDialogNodeId ? nodeMap.get(activeDialogNodeId) : undefined),
     [activeDialogNodeId, nodeMap],
   );
-  const dialogNarrative = dialogNode ? nodeNarratives[dialogNode.id] : undefined;
+  const dialogNarrative = dialogNode ? activeNarratives[dialogNode.id] : undefined;
 
   useEffect(() => {
     return () => {
@@ -296,11 +334,48 @@ export function NetworkSimulationSection() {
     };
   }, []);
 
+  useEffect(() => {
+    followLiveRef.current = followLive;
+  }, [followLive]);
+
+  useEffect(() => {
+    currentDayRef.current = currentDay;
+  }, [currentDay]);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
+    narrativesByDayRef.current = narrativesByDay;
+  }, [narrativesByDay]);
+
+  useEffect(() => {
+    if (!isReplayPlaying) return;
+    if (maxReplayDay <= 0) return;
+
+    const timer = window.setInterval(() => {
+      setFollowLive(false);
+      setReplayDay((previousDay) => {
+        const nextDay = previousDay + 1;
+        if (nextDay > maxReplayDay) {
+          setIsReplayPlaying(false);
+          return maxReplayDay;
+        }
+        return nextDay;
+      });
+    }, 900);
+
+    return () => window.clearInterval(timer);
+  }, [isReplayPlaying, maxReplayDay]);
+
   function applyStreamEvent(event: NetworkSimulatorStreamEvent) {
     if (event.session_id) setSessionId(event.session_id);
 
     if (event.type === "progress") {
-      setCurrentDay(event.tick ?? 0);
+      const tick = event.tick ?? 0;
+      setCurrentDay(tick);
+      if (followLiveRef.current) setReplayDay(tick);
       return;
     }
 
@@ -309,39 +384,67 @@ export function NetworkSimulationSection() {
         nodes?: Array<Record<string, unknown>>;
         edges?: Array<Record<string, unknown>>;
         kpis?: { revenue_delta?: number; cost_delta?: number; risk_delta?: number };
+        llm_context?: Record<string, unknown>;
+        day_summary_ai?: string;
       } | undefined;
+      const tick = event.tick ?? 0;
       if (state?.nodes) {
-        setNodes(
-          state.nodes.map((node) => {
-            const id = String(node.node_id ?? "");
-            const type = asNodeType(String(node.node_type ?? "business"));
-            return {
-              id,
-              label: String(node.label ?? node.node_id ?? "Node"),
-              type,
-              ...pickNodeIcons(id, type),
-              x: Number(node.x ?? 120),
-              y: Number(node.y ?? 120),
-              vx: 0,
-              vy: 0,
-              influence: Number(node.influence ?? 0.5),
-              status: asNodeStatus(String(node.status ?? "stable")),
-              lastAction: nodeNarratives[id]?.summary_short ?? "awaiting action",
-            };
-          }),
-        );
+        const dayNarratives = narrativesByDayRef.current[tick] ?? {};
+        const mappedNodes = state.nodes.map((node) => {
+          const id = String(node.node_id ?? "");
+          const type = asNodeType(String(node.node_type ?? "business"));
+          return {
+            id,
+            label: String(node.label ?? node.node_id ?? "Node"),
+            type,
+            ...pickNodeIcons(id, type),
+            x: Number(node.x ?? 120),
+            y: Number(node.y ?? 120),
+            vx: 0,
+            vy: 0,
+            influence: Number(node.influence ?? 0.5),
+            status: asNodeStatus(String(node.status ?? "stable")),
+            lastAction: dayNarratives[id]?.summary_short ?? "awaiting action",
+          };
+        });
+        setNodes(mappedNodes);
+        setTimelineByDay((prev) => ({
+          ...prev,
+          [tick]: {
+            day: tick,
+            nodes: mappedNodes,
+            edges: prev[tick]?.edges ?? [],
+            kpis: state.kpis,
+            summary:
+              (typeof state.day_summary_ai === "string" && state.day_summary_ai.trim().length > 0
+                ? state.day_summary_ai
+                : "") ||
+              (typeof state.llm_context === "object" && state.llm_context && "summary" in state.llm_context
+                ? String((state.llm_context as Record<string, unknown>).summary ?? "")
+                : prev[tick]?.summary),
+          },
+        }));
       }
       if (state?.edges) {
-        setEdges(
-          state.edges.map((edge) => ({
-            id: String(edge.edge_id ?? ""),
-            source: String(edge.source ?? ""),
-            target: String(edge.target ?? ""),
-            type: asEdgeType(String(edge.edge_type ?? "information")),
-            weight: Number(edge.weight ?? 0.5),
-            lastTick: event.tick ?? 0,
-          })),
-        );
+        const mappedEdges = state.edges.map((edge) => ({
+          id: String(edge.edge_id ?? ""),
+          source: String(edge.source ?? ""),
+          target: String(edge.target ?? ""),
+          type: asEdgeType(String(edge.edge_type ?? "information")),
+          weight: Number(edge.weight ?? 0.5),
+          lastTick: tick,
+        }));
+        setEdges(mappedEdges);
+        setTimelineByDay((prev) => ({
+          ...prev,
+          [tick]: {
+            day: tick,
+            nodes: prev[tick]?.nodes ?? nodesRef.current,
+            edges: mappedEdges,
+            kpis: prev[tick]?.kpis,
+            summary: prev[tick]?.summary,
+          },
+        }));
       }
       return;
     }
@@ -359,7 +462,15 @@ export function NetworkSimulationSection() {
       const nodeId = String(message?.node_id ?? "");
       const narrative = normalizeNarrative(message?.narrative);
       if (nodeId && narrative) {
+        const tick = event.tick ?? currentDayRef.current;
         setNodeNarratives((prev) => ({ ...prev, [nodeId]: narrative }));
+        setNarrativesByDay((prev) => ({
+          ...prev,
+          [tick]: {
+            ...(prev[tick] ?? {}),
+            [nodeId]: narrative,
+          },
+        }));
         setActiveDialogNodeId(nodeId);
         setNodes((prev) =>
           prev.map((node) =>
@@ -416,6 +527,11 @@ export function NetworkSimulationSection() {
     setObserverReport("");
     setChatMessages([]);
     setNodeNarratives({});
+    setTimelineByDay({});
+    setNarrativesByDay({});
+    setReplayDay(0);
+    setFollowLive(true);
+    setIsReplayPlaying(false);
   }
 
   function startSimulation() {
@@ -532,7 +648,7 @@ export function NetworkSimulationSection() {
     event.stopPropagation();
     dragNodeRef.current = { nodeId, pointerId: event.pointerId };
     setSelectedNodeId(nodeId);
-    if (nodeNarratives[nodeId]) setActiveDialogNodeId(nodeId);
+    if (activeNarratives[nodeId]) setActiveDialogNodeId(nodeId);
   }
 
   function handleSvgPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
@@ -559,6 +675,14 @@ export function NetworkSimulationSection() {
         top: clamp(dialogNode.y * zoom + offset.y - 170, 10, 320),
       }
     : null;
+  const activeDaySummary = displaySnapshot?.summary ?? `Day ${activeDay}: simulation state snapshot.`;
+  const activeDayKpis = displaySnapshot?.kpis;
+  const activeDayNarrativeList = Object.entries(activeNarratives)
+    .slice(0, 3)
+    .map(([nodeId, narrative]) => {
+      const node = nodeMap.get(nodeId);
+      return `${node?.label ?? nodeId}: ${narrative.summary_short}`;
+    });
 
   return (
     <section className="grid gap-4 px-4 py-5 lg:grid-cols-[300px_1fr_360px]">
@@ -643,6 +767,75 @@ export function NetworkSimulationSection() {
             </Badge>
           </div>
         </div>
+        <div className="mb-2 rounded-xl border border-border/80 bg-background/80 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setFollowLive(false);
+                setReplayDay((prev) => Math.max(0, prev - 1));
+                setIsReplayPlaying(false);
+              }}
+              disabled={activeDay <= 0}
+            >
+              Prev
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                if (activeDay >= maxReplayDay) {
+                  setFollowLive(false);
+                  setReplayDay(0);
+                }
+                setIsReplayPlaying((prev) => !prev);
+              }}
+              disabled={maxReplayDay <= 0}
+            >
+              {isReplayPlaying ? <Pause className="mr-1 h-3.5 w-3.5" /> : <Play className="mr-1 h-3.5 w-3.5" />}
+              {isReplayPlaying ? "Pause" : "Play"}
+            </Button>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(maxReplayDay, 0)}
+              value={activeDay}
+              className="h-2 w-[220px] cursor-pointer accent-primary"
+              onChange={(event) => {
+                setFollowLive(false);
+                setIsReplayPlaying(false);
+                setReplayDay(Number(event.target.value));
+              }}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setFollowLive(false);
+                setReplayDay((prev) => Math.min(maxReplayDay, prev + 1));
+                setIsReplayPlaying(false);
+              }}
+              disabled={activeDay >= maxReplayDay}
+            >
+              Next
+            </Button>
+            <Button
+              size="sm"
+              variant={followLive ? "default" : "ghost"}
+              onClick={() => {
+                setFollowLive(true);
+                setReplayDay(currentDay);
+                setIsReplayPlaying(false);
+              }}
+            >
+              Live
+            </Button>
+            <span className="text-xs font-semibold text-foreground">
+              Day {activeDay} / {Math.max(maxReplayDay, currentDay)}
+            </span>
+          </div>
+        </div>
         <div
           className="relative h-[560px] overflow-hidden rounded-2xl border border-border/80 bg-[radial-gradient(circle_at_12%_18%,rgba(233,119,46,0.12),transparent_34%),radial-gradient(circle_at_84%_76%,rgba(60,131,123,0.15),transparent_38%),linear-gradient(180deg,rgba(250,246,239,0.95),rgba(241,235,224,0.94))]"
           onWheel={handleWheel}
@@ -653,7 +846,7 @@ export function NetworkSimulationSection() {
         >
           <svg className="h-full w-full touch-none" onPointerMove={handleSvgPointerMove} onPointerUp={handleSvgPointerUp}>
             <g transform={`translate(${offset.x}, ${offset.y}) scale(${zoom})`}>
-              {edges.map((edge) => {
+              {displayEdges.map((edge) => {
                 const source = nodeMap.get(edge.source);
                 const target = nodeMap.get(edge.target);
                 if (!source || !target) return null;
@@ -673,7 +866,7 @@ export function NetworkSimulationSection() {
                 );
               })}
 
-              {nodes.map((node) => {
+              {displayNodes.map((node) => {
                 const style = NODE_TYPE_STYLE[node.type];
                 const isSelected = selectedNode?.id === node.id;
                 const radius = isSelected ? 31 : 25 + node.influence * 5;
@@ -685,7 +878,7 @@ export function NetworkSimulationSection() {
                     onPointerDown={(event) => {
                       event.stopPropagation();
                       setSelectedNodeId(node.id);
-                      if (nodeNarratives[node.id]) setActiveDialogNodeId(node.id);
+                      if (activeNarratives[node.id]) setActiveDialogNodeId(node.id);
                     }}
                     onClick={() => setSelectedNodeId(node.id)}
                   >
@@ -800,6 +993,30 @@ export function NetworkSimulationSection() {
                   </ScrollArea>
                 </div>
               )}
+            </div>
+          )}
+        </div>
+        <div className="mt-2 rounded-2xl border border-border bg-background/80 p-3">
+          <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Day Summary</p>
+          <p className="mt-1 text-sm text-foreground">{activeDaySummary}</p>
+          <div className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+            <div className="rounded-lg border border-border/70 bg-card/70 p-2">
+              Revenue: {((activeDayKpis?.revenue_delta ?? 0) * 100).toFixed(2)}%
+            </div>
+            <div className="rounded-lg border border-border/70 bg-card/70 p-2">
+              Cost: {((activeDayKpis?.cost_delta ?? 0) * 100).toFixed(2)}%
+            </div>
+            <div className="rounded-lg border border-border/70 bg-card/70 p-2">
+              Risk: {((activeDayKpis?.risk_delta ?? 0) * 100).toFixed(2)}%
+            </div>
+          </div>
+          {activeDayNarrativeList.length > 0 && (
+            <div className="mt-2 rounded-lg border border-border/70 bg-card/70 p-2 text-xs text-muted-foreground">
+              {activeDayNarrativeList.map((line) => (
+                <p key={line} className="mb-1 last:mb-0">
+                  {line}
+                </p>
+              ))}
             </div>
           )}
         </div>
