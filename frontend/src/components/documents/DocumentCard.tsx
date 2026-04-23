@@ -1,4 +1,5 @@
-import { FileText, ExternalLink, Trash2, Calendar } from "lucide-react";
+import { useState } from "react";
+import { FileText, ExternalLink, Trash2, Calendar, File } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +34,7 @@ interface DocumentCardProps {
 
 export const DocumentCard = ({ document, onDelete }: DocumentCardProps) => {
   const { toast } = useToast();
+  const [imageError, setImageError] = useState(false);
 
   const handleDelete = async () => {
     try {
@@ -80,8 +82,100 @@ export const DocumentCard = ({ document, onDelete }: DocumentCardProps) => {
     }
   };
 
+  // Generate Cloudinary preview URL for any file type
+  const getCloudinaryPreview = (url: string): string | null => {
+    if (!url.includes('cloudinary.com')) return null;
+    
+    // Extract file extension
+    const ext = url.split('.').pop()?.toLowerCase();
+    
+    // For images, return as-is (Cloudinary serves them directly)
+    const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+    if (imageExts.includes(ext || '')) {
+      // Add transformation for consistent preview size
+      return url.replace('/upload/', '/upload/w_800,h_600,c_fit/');
+    }
+    
+    // For PDFs, generate image preview of first page
+    if (ext === 'pdf') {
+      return url.replace('/upload/', '/upload/w_800,h_600,c_fit,pg_1,f_jpg/').replace('.pdf', '.jpg');
+    }
+    
+    // For documents (doc, docx, etc.), Cloudinary can generate previews
+    const docExts = ['doc', 'docx', 'ppt', 'pptx'];
+    if (docExts.includes(ext || '')) {
+      return url.replace('/upload/', '/upload/w_800,h_600,c_fit,pg_1,f_jpg/').replace(`.${ext}`, '.jpg');
+    }
+    
+    return null;
+  };
+
+  // Check file types for fallback icons
+  const getFileType = (path: string): string => {
+    const ext = path.split('.').pop()?.toLowerCase() || '';
+    
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
+    if (ext === 'pdf') return 'pdf';
+    if (['doc', 'docx', 'txt', 'md', 'rtf'].includes(ext)) return 'document';
+    if (['xlsx', 'xls', 'csv'].includes(ext)) return 'spreadsheet';
+    
+    return 'unknown';
+  };
+
+  const previewUrl = getCloudinaryPreview(document.file_path);
+  const fileType = getFileType(document.file_path);
+
   return (
-    <Card className="border-2 border-orange-100 hover:border-orange-300 hover:shadow-lg transition-all bg-white">
+    <Card className="border-2 border-orange-100 hover:border-orange-300 hover:shadow-lg transition-all bg-white overflow-hidden">
+      {/* Cloudinary Preview (works for images, PDFs, and documents) */}
+      {previewUrl && !imageError ? (
+        <div 
+          className="w-full h-48 bg-gray-100 overflow-hidden cursor-pointer group"
+          onClick={() => window.open(document.file_path, "_blank")}
+        >
+          <img 
+            src={previewUrl} 
+            alt={document.title}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+            onError={() => setImageError(true)}
+          />
+        </div>
+      ) : (
+        // Fallback for non-Cloudinary files or unsupported types
+        <div 
+          className="w-full h-48 bg-gradient-to-br from-gray-50 to-gray-100 overflow-hidden cursor-pointer hover:from-gray-100 hover:to-gray-200 transition-colors flex items-center justify-center"
+          onClick={() => window.open(document.file_path, "_blank")}
+        >
+          <div className="text-center">
+            {fileType === 'pdf' && (
+              <>
+                <FileText className="w-16 h-16 text-red-600 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-700">PDF Document</p>
+              </>
+            )}
+            {fileType === 'document' && (
+              <>
+                <File className="w-16 h-16 text-blue-600 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-700">Document</p>
+              </>
+            )}
+            {fileType === 'spreadsheet' && (
+              <>
+                <FileText className="w-16 h-16 text-green-600 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-700">Spreadsheet</p>
+              </>
+            )}
+            {fileType === 'unknown' && (
+              <>
+                <File className="w-16 h-16 text-gray-600 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-700">File</p>
+              </>
+            )}
+            <p className="text-xs text-gray-500 mt-1">Click to view</p>
+          </div>
+        </div>
+      )}
+      
       <div className="p-4 space-y-3">
         {/* Header */}
         <div className="flex items-start gap-3">

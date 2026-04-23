@@ -15,6 +15,7 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
+  const [currentStage, setCurrentStage] = useState<string>("Uploading...");
   const [customExtraction, setCustomExtraction] = useState("");
   const { toast } = useToast();
 
@@ -32,6 +33,27 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
     setUploading(true);
     setProgress(0);
     setUploadStatus("idle");
+    setCurrentStage("Uploading to cloud storage...");
+
+    // Realistic multi-stage progress simulation
+    const progressInterval = setInterval(() => {
+      setProgress(prev => {
+        if (prev < 20) {
+          setCurrentStage("Uploading to cloud storage...");
+          return prev + 2;
+        } else if (prev < 40) {
+          setCurrentStage("Analyzing document with AI...");
+          return prev + 1;
+        } else if (prev < 70) {
+          setCurrentStage("Extracting data (this may take 30-60 seconds)...");
+          return prev + 0.5;
+        } else if (prev < 90) {
+          setCurrentStage("Writing to database...");
+          return prev + 0.3;
+        }
+        return Math.min(prev + 0.1, 95);
+      });
+    }, 500);  // Update every 500ms
 
     try {
       const formData = new FormData();
@@ -42,18 +64,20 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
         formData.append("custom_extraction", customExtraction.trim());
       }
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setProgress(prev => Math.min(prev + 10, 90));
-      }, 200);
+      // 90-second timeout for AI processing
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
 
       const response = await fetch("http://localhost:8000/api/documents/upload", {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
 
+      clearTimeout(timeoutId);
       clearInterval(progressInterval);
       setProgress(100);
+      setCurrentStage("Complete!");
 
       const result = await response.json();
 
@@ -70,22 +94,38 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
           setUploading(false);
           setProgress(0);
           setUploadStatus("idle");
+          setCurrentStage("Uploading...");
           setCustomExtraction(""); // Clear custom extraction field
         }, 3000);
       } else {
+        clearInterval(progressInterval);
         throw new Error(result.error || "Upload failed");
       }
     } catch (error) {
+      clearInterval(progressInterval);
       setUploadStatus("error");
-      toast({
-        title: "Upload failed",
-        description: error instanceof Error ? error.message : "An error occurred during upload",
-        variant: "destructive",
-      });
+      
+      // Handle timeout specifically
+      if (error instanceof Error && error.name === 'AbortError') {
+        toast({
+          title: "Processing timeout",
+          description: "Document processing took longer than expected. Please try again or upload a smaller file.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Upload failed",
+          description: error instanceof Error ? error.message : "An error occurred during upload",
+          variant: "destructive",
+        });
+      }
+      
+      setCurrentStage("Failed");
       setTimeout(() => {
         setUploading(false);
         setProgress(0);
         setUploadStatus("idle");
+        setCurrentStage("Uploading...");
       }, 3000);
     }
   };
@@ -108,16 +148,16 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
   }, []);
 
   return (
-    <Card className="border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-white shadow-lg">
+    <Card className="border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-white shadow-lg h-full">
       <div className="p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-lg bg-orange-400 flex items-center justify-center">
             <Upload className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Upload Documents</h2>
-            <p className="text-sm text-gray-600">
-              Upload business documents for AI extraction and analysis
+            <h2 className="text-lg font-semibold text-gray-900">Upload</h2>
+            <p className="text-xs text-gray-600">
+              AI extraction
             </p>
           </div>
         </div>
@@ -148,7 +188,7 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={`
-            relative border-2 border-dashed rounded-xl p-12 text-center transition-all
+            relative border-2 border-dashed rounded-xl p-8 text-center transition-all
             ${isDragging ? "border-orange-500 bg-orange-100" : "border-orange-300 bg-white/50"}
             ${uploading ? "pointer-events-none" : "cursor-pointer hover:border-orange-400 hover:bg-orange-50"}
           `}
@@ -164,14 +204,17 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
 
           {!uploading && uploadStatus === "idle" && (
             <label htmlFor="file-upload" className="cursor-pointer">
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-orange-100 flex items-center justify-center mb-4">
-                <File className="w-8 h-8 text-orange-600" />
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-orange-100 flex items-center justify-center mb-3">
+                <File className="w-7 h-7 text-orange-600" />
               </div>
-              <p className="text-lg font-semibold text-gray-900 mb-2">
-                Drop files here or click to browse
+              <p className="text-base font-semibold text-gray-900 mb-1">
+                Drop files here
               </p>
-              <p className="text-sm text-gray-600">
-                Supports PDF, Word, Excel, Images (Max 10MB)
+              <p className="text-xs text-gray-600">
+                or click to browse
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                PDF, Word, Excel, Images
               </p>
             </label>
           )}
@@ -179,10 +222,19 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
           {uploading && uploadStatus === "idle" && (
             <div className="space-y-4">
               <Loader2 className="w-12 h-12 mx-auto text-orange-600 animate-spin" />
-              <p className="text-lg font-semibold text-gray-900">Processing document...</p>
-              <p className="text-sm text-gray-600">Extracting data with AI</p>
+              <p className="text-lg font-semibold text-gray-900">{currentStage}</p>
+              <p className="text-sm text-gray-600">
+                {progress < 20 ? "Uploading file to cloud..." :
+                 progress < 40 ? "AI is reading your document..." :
+                 progress < 70 ? "This may take 30-60 seconds for AI processing" :
+                 progress < 90 ? "Saving extracted data..." :
+                 "Finalizing..."}
+              </p>
               <div className="max-w-md mx-auto">
                 <Progress value={progress} className="h-2" />
+                <p className="text-xs text-gray-500 mt-2 text-center">
+                  {Math.round(progress)}% complete
+                </p>
               </div>
             </div>
           )}

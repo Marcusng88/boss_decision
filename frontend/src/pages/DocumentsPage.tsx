@@ -45,12 +45,19 @@ const DocumentsPage = () => {
       </header>
 
       {/* Main Content */}
-      <main className="container max-w-7xl py-8 space-y-8">
-        {/* Upload Section */}
-        <DocumentUpload onUploadSuccess={handleUploadSuccess} />
+      <main className="container max-w-[95%] mx-auto py-8">
+        {/* Side-by-side layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Upload Section - Left side (smaller) */}
+          <div className="lg:col-span-4">
+            <DocumentUpload onUploadSuccess={handleUploadSuccess} />
+          </div>
 
-        {/* Documents List Section */}
-        <DocumentList refreshTrigger={refreshTrigger} />
+          {/* Documents List Section - Right side (bigger) */}
+          <div className="lg:col-span-8">
+            <DocumentList refreshTrigger={refreshTrigger} />
+          </div>
+        </div>
       </main>
     </div>
   );
