@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from pydantic import Field
 from typing import Any, Optional
 import uvicorn
 
@@ -61,8 +63,48 @@ class SimulatorRequest(BaseModel):
     business_context: Optional[dict[str, Any]] = None
 
 
+class DeepSimulatorRequest(BaseModel):
+    """Request model for deep 2D simulator execution."""
+
+    query: str
+    max_ticks: int = 5
+    seed: Optional[int] = None
+    scenario_id: str = "pricing_war_v1"
+    min_personas: int = 3
+    max_personas: int = 6
+    summary_cadence_ticks: int = 7
+
+
+class NetworkSimulatorRequest(BaseModel):
+    """Request model for network simulation execution."""
+
+    query: str
+    max_ticks: int = 16
+    seed: Optional[int] = None
+    min_nodes: int = 15
+    max_nodes: int = 30
+    scenario_id: str = "business_network_v1"
+    allow_internet: bool = True
+    data_context_path: Optional[str] = None
+
+
+class NetworkShockRequest(BaseModel):
+    """Request model for shock injection into an active network session."""
+
+    shock_type: str
+    summary: str
+    severity: float
+    targets: list[str] = Field(default_factory=list)
+
+
+class ObserverChatRequest(BaseModel):
+    """Request model for post-run observer chat."""
+
+    question: str
+
+
 def _ensure_simulator_import_path() -> None:
-    simulator_root = Path(__file__).resolve().parent / "simulator_agent_umh26"
+    simulator_root = Path(__file__).resolve().parent / "simulator_agent"
     simulator_root_str = str(simulator_root)
     if simulator_root_str not in sys.path:
         sys.path.insert(0, simulator_root_str)
@@ -70,9 +112,37 @@ def _ensure_simulator_import_path() -> None:
 
 def _get_simulator_agent():
     _ensure_simulator_import_path()
-    from simulator_agent_umh26.src import agent as simulator_agent
+    from simulator_agent.src import agent as simulator_agent
 
     return simulator_agent
+
+
+def _ensure_deep_simulator_import_path() -> None:
+    backend_root = Path(__file__).resolve().parent
+    backend_root_str = str(backend_root)
+    if backend_root_str not in sys.path:
+        sys.path.insert(0, backend_root_str)
+
+
+def _get_deep_simulator_agent():
+    _ensure_deep_simulator_import_path()
+    from deep_simulation_agent.src import agent as deep_simulator_agent
+
+    return deep_simulator_agent
+
+
+def _ensure_network_simulator_import_path() -> None:
+    backend_root = Path(__file__).resolve().parent
+    backend_root_str = str(backend_root)
+    if backend_root_str not in sys.path:
+        sys.path.insert(0, backend_root_str)
+
+
+def _get_network_simulator_agent():
+    _ensure_network_simulator_import_path()
+    from network_simulation_agent.src import agent as network_simulator_agent
+
+    return network_simulator_agent
 
 
 def _build_simulator_initial_state(request: SimulatorRequest) -> dict[str, Any]:
@@ -84,6 +154,31 @@ def _build_simulator_initial_state(request: SimulatorRequest) -> dict[str, Any]:
         "persona_results": [],
         "persona_stream_events": [],
         "scenario_branches": [],
+    }
+
+
+def _build_deep_simulator_initial_state(request: DeepSimulatorRequest) -> dict[str, Any]:
+    return {
+        "query": request.query,
+        "max_ticks": request.max_ticks,
+        "seed": request.seed,
+        "scenario_id": request.scenario_id,
+        "min_personas": request.min_personas,
+        "max_personas": request.max_personas,
+        "summary_cadence_ticks": request.summary_cadence_ticks,
+    }
+
+
+def _build_network_simulator_initial_state(request: NetworkSimulatorRequest) -> dict[str, Any]:
+    return {
+        "query": request.query,
+        "max_ticks": request.max_ticks,
+        "seed": request.seed,
+        "min_nodes": request.min_nodes,
+        "max_nodes": request.max_nodes,
+        "scenario_id": request.scenario_id,
+        "allow_internet": request.allow_internet,
+        "data_context_path": request.data_context_path,
     }
 
 
@@ -269,6 +364,147 @@ async def stream_simulator(request: SimulatorRequest):
             yield _ndjson_line({"type": "done"})
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/deep-simulator/run")
+async def run_deep_simulator(request: DeepSimulatorRequest):
+    """
+    Execute deep 2D simulator and return final result in one response.
+    """
+    try:
+        deep_simulator_agent = _get_deep_simulator_agent()
+        initial_state = _build_deep_simulator_initial_state(request)
+        result = await asyncio.to_thread(deep_simulator_agent.invoke, initial_state)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Deep simulator run failed: {str(e)}")
+
+
+@app.post("/api/deep-simulator/stream")
+async def stream_deep_simulator(request: DeepSimulatorRequest):
+    """
+    Stream deep simulator world updates and subagent chunks as NDJSON.
+    """
+    deep_simulator_agent = _get_deep_simulator_agent()
+    initial_state = _build_deep_simulator_initial_state(request)
+
+    async def event_stream():
+        try:
+            async for event in deep_simulator_agent.astream(initial_state):
+                yield _ndjson_line(_safe_json_payload(event))
+        except Exception as e:
+            yield _ndjson_line({"type": "error", "error": str(e)})
+            yield _ndjson_line({"type": "done"})
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/network-simulator/run")
+async def run_network_simulator(request: NetworkSimulatorRequest):
+    """
+    Execute network simulation and return final response in one payload.
+    """
+    try:
+        network_simulator_agent = _get_network_simulator_agent()
+        initial_state = _build_network_simulator_initial_state(request)
+        result = await asyncio.to_thread(network_simulator_agent.invoke, initial_state)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Network simulator run failed: {str(e)}")
+
+
+@app.post("/api/network-simulator/stream")
+async def stream_network_simulator(request: NetworkSimulatorRequest):
+    """
+    Stream network simulation events as NDJSON.
+    """
+    network_simulator_agent = _get_network_simulator_agent()
+    initial_state = _build_network_simulator_initial_state(request)
+
+    async def event_stream():
+        try:
+            async for event in network_simulator_agent.astream(initial_state):
+                yield _ndjson_line(_safe_json_payload(event))
+        except Exception as e:
+            yield _ndjson_line({"type": "error", "error": str(e)})
+            yield _ndjson_line({"type": "done"})
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/network-simulator/{session_id}/shock")
+async def add_network_simulator_shock(session_id: str, request: NetworkShockRequest):
+    """
+    Queue shock event for the next stream tick of the given session.
+    """
+    try:
+        _ensure_network_simulator_import_path()
+        from network_simulation_agent.src.engine import SESSION_STORE
+        from network_simulation_agent.src.schema import ShockEvent
+
+        shock = ShockEvent(
+            shock_type=request.shock_type,
+            summary=request.summary,
+            severity=request.severity,
+            targets=request.targets,
+        )
+        SESSION_STORE.queue_shock(session_id, shock)
+        return {"status": "ok", "session_id": session_id, "queued_shock": shock.model_dump(mode="json")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to queue shock: {str(e)}")
+
+
+@app.post("/api/network-simulator/{session_id}/observer-chat")
+async def network_simulator_observer_chat(session_id: str, request: ObserverChatRequest):
+    """
+    Return observer answer grounded to persisted session artifacts.
+    """
+    try:
+        _ensure_network_simulator_import_path()
+        from network_simulation_agent.src.engine import SESSION_STORE
+        from network_simulation_agent.src.observer import build_observer_answer
+
+        summary = SESSION_STORE.get_observer_report(session_id)
+        backend_root = Path(__file__).resolve().parent
+        base_dir = backend_root / "network_simulation_agent"
+        response = build_observer_answer(
+            base_dir=base_dir,
+            session_id=session_id,
+            question=request.question,
+            summary=summary or "",
+        )
+        return {"status": "ok", "session_id": session_id, **response}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Observer chat failed: {str(e)}")
+
+
+@app.get("/api/network-simulator/{session_id}/storyline")
+async def download_network_simulator_storyline(session_id: str):
+    """
+    Download final storyline markdown artifact for a completed network simulation session.
+    """
+    try:
+        _ensure_network_simulator_import_path()
+        from network_simulation_agent.src.observer import storyline_path
+
+        backend_root = Path(__file__).resolve().parent
+        base_dir = backend_root / "network_simulation_agent"
+        target = storyline_path(base_dir=base_dir, session_id=session_id)
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="Storyline artifact not found for this session.")
+        return FileResponse(
+            path=target,
+            filename=f"{session_id}_storyline.md",
+            media_type="text/markdown; charset=utf-8",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Storyline download failed: {str(e)}")
 
 
 # ============================================

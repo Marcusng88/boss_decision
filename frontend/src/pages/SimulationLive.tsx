@@ -1,4 +1,4 @@
-import { Brain, ChevronLeft, Radio, Sparkles } from "lucide-react";
+import { Brain, ChevronLeft, Network, Radio, Sparkles, Spline } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { SimulatorSection } from "@/components/simulator/SimulatorSection";
 
@@ -32,6 +32,20 @@ const SimulationLive = () => {
               <Radio className="h-3.5 w-3.5 text-primary" />
               Live Stream
             </span>
+            <Link
+              to="/simulation-deep"
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-foreground hover:bg-card"
+            >
+              <Spline className="h-3.5 w-3.5" />
+              Deep 2D
+            </Link>
+            <Link
+              to="/simulation-network"
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-foreground hover:bg-card"
+            >
+              <Network className="h-3.5 w-3.5" />
+              Network Lab
+            </Link>
             <Link
               to="/"
               className="inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-foreground hover:bg-card"
