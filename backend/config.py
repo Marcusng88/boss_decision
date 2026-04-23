@@ -2,7 +2,7 @@
 Configuration management for the backend API.
 Loads environment variables and provides settings.
 """
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from dotenv import load_dotenv
 from typing import Optional
@@ -19,10 +19,10 @@ class Settings(BaseSettings):
     api_version: str = "v1"
     port: int = 8000
     
-    # Supabase Configuration
-    supabase_url: str
-    supabase_anon_key: str
-    supabase_service_key: str
+    # Supabase Configuration (optional in local-filesystem stage)
+    supabase_url: str | None = None
+    supabase_anon_key: str | None = None
+    supabase_service_key: str | None = None
     
     # Database Configuration (direct PostgreSQL if needed)
     database_url: str | None = None
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # LLM Configuration
     google_api_key: Optional[str] = None
     openai_api_key: str | None = None
-    llm_model: str = "gemini-2.5-flash-lite"
+    llm_model: str = "gemma-4-31b-it"
     llm_temperature: float = 0.7
     
     # LangChain Configuration
@@ -41,9 +41,11 @@ class Settings(BaseSettings):
     vector_store_type: str = "chroma"  # "chroma" or "faiss"
     chroma_persist_directory: str = "./data/chroma"
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
 
 @lru_cache()

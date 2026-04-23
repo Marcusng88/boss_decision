@@ -31,7 +31,7 @@ except ModuleNotFoundError:
 @dataclass
 class DocumentServiceSettings:
     google_api_key: str | None
-    llm_model: str = "gemini-2.5-flash-lite"
+    llm_model: str = "gemma-4-31b-it"
     llm_temperature: float = 0.7
 
 
@@ -61,7 +61,7 @@ def load_document_settings() -> DocumentServiceSettings:
 
         return DocumentServiceSettings(
             google_api_key=os.getenv("GOOGLE_API_KEY"),
-            llm_model=os.getenv("LLM_MODEL", "gemini-2.5-flash-lite"),
+            llm_model=os.getenv("LLM_MODEL", "gemma-4-31b-it"),
             llm_temperature=temp,
         )
 

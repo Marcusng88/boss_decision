@@ -9,7 +9,8 @@ from typing import Optional
 import uvicorn
 
 from config import get_settings
-from db import DatabaseService
+from services.local_knowledge_service import LocalKnowledgeService
+from agents import HRAgent, SalesAgent, ManagerAgent
 
 # Initialize settings
 settings = get_settings()
@@ -30,8 +31,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database service
-db = DatabaseService()
+# Initialize local knowledge service and agents
+knowledge = LocalKnowledgeService()
+hr_agent = HRAgent(knowledge)
+sales_agent = SalesAgent(knowledge)
+manager_agent = ManagerAgent([hr_agent, sales_agent])
 
 
 # ============================================
@@ -70,16 +74,24 @@ async def root():
 
 @app.get("/api/health")
 async def health_check():
-    """Detailed health check with database connectivity."""
+    """Detailed health check with local knowledge workspace readiness."""
     try:
-        # Test database connection
-        supabase = db.client
-        response = supabase.table('department').select('count').execute()
-        
+        required_dirs = [
+            knowledge.workplaces_root,
+            knowledge.documents_dir,
+            knowledge.raw_dir,
+            knowledge.entities_dir,
+            knowledge.relationship_dir,
+        ]
+
+        missing = [str(path) for path in required_dirs if not path.exists()]
+        if missing:
+            raise RuntimeError(f"Missing required directories: {missing}")
+
         return {
             "status": "healthy",
-            "database": "connected",
-            "supabase": "ok"
+            "storage": "local_filesystem",
+            "workplaces_root": str(knowledge.workplaces_root)
         }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
@@ -89,9 +101,9 @@ async def health_check():
 async def get_employee(employee_id: int):
     """Get employee profile with related records."""
     try:
-        employee = await db.get_employee(employee_id)
-        hr_records = await db.get_employee_hr_records(employee_id)
-        sales_records = await db.get_employee_sales_records(employee_id)
+        employee = await knowledge.get_employee(employee_id)
+        hr_records = await knowledge.get_employee_hr_records(employee_id)
+        sales_records = await knowledge.get_employee_sales_records(employee_id)
         
         return {
             "employee": employee,
@@ -103,11 +115,11 @@ async def get_employee(employee_id: int):
 
 
 @app.get("/api/cases/{case_id}")
-async def get_case(case_id: int):
+async def get_case(case_id: str):
     """Get decision case with evidence and output."""
     try:
-        evidence = await db.get_case_evidence(case_id)
-        decision = await db.get_decision_output(case_id)
+        evidence = await knowledge.get_case_evidence(case_id)
+        decision = await knowledge.get_decision_output(case_id)
         
         return {
             "case_id": case_id,
@@ -124,30 +136,69 @@ async def analyze_query(request: AnalyzeRequest):
     Main decision engine endpoint.
     Analyzes a business question using multi-agent system.
     
-    TODO: Implement full agent orchestration (see agents/ folder)
+    Runs local multi-agent orchestration using file-based knowledge.
     """
     try:
-        # Create decision case
-        case = await db.create_decision_case(
+        # Create decision case artifact
+        case = await knowledge.create_decision_case(
             question=request.query,
             context=request.context,
             target_type=request.target_type,
             target_id=request.target_id,
             submitted_by=request.submitted_by
         )
-        
-        # TODO: Implement multi-agent pipeline
-        # 1. Evidence retrieval (retrieve relevant records)
-        # 2. Agent analysis (HR, Sales, Legal, Finance, Marketing, Supply Chain)
-        # 3. Manager synthesis (aggregate agent outputs)
-        # 4. Save decision output
-        
-        # For now, return case ID with placeholder
+
+        orchestration = await manager_agent.orchestrate_dynamic(
+            query=request.query,
+            context={
+                "target_type": request.target_type,
+                "target_id": request.target_id,
+                "context": request.context,
+                "submitted_by": request.submitted_by,
+                "knowledge_paths": {
+                    "entities": str(knowledge.entities_dir),
+                    "relationships": str(knowledge.relationship_dir),
+                    "raw": str(knowledge.raw_dir),
+                },
+            },
+        )
+
+        final_decision = orchestration["final_decision"]
+
+        # Persist evidence links emitted by agents for case traceability.
+        for insight in orchestration.get("agent_insights", []):
+            for evidence in insight.get("evidence_used", []):
+                record_id = evidence.get("record_id") or evidence.get("path") or "unknown"
+                source_table = evidence.get("source") or "local_knowledge"
+                await knowledge.save_case_evidence(
+                    case_id=case["case_id"],
+                    source_table=str(source_table),
+                    record_id=str(record_id),
+                    relevance_score=0.8,
+                    retrieval_method="filesystem",
+                    notes=evidence.get("type") or insight.get("agent_name"),
+                )
+
+        await knowledge.save_decision_output(
+            case_id=case["case_id"],
+            recommendation=final_decision["recommendation"],
+            risk_level=final_decision["risk_level"],
+            confidence_score=final_decision["confidence_score"],
+            rationale=final_decision["rationale"],
+            conservative_view=orchestration.get("conservative_view"),
+            aggressive_view=orchestration.get("aggressive_view"),
+            manager_persona=final_decision.get("manager_persona", "balanced"),
+        )
+
         return {
-            "status": "processing",
+            "status": "completed",
             "case_id": case['case_id'],
-            "message": "Decision case created. Multi-agent pipeline not yet implemented.",
-            "query": request.query
+            "query": request.query,
+            "routing": orchestration.get("routing", {}),
+            "final_decision": final_decision,
+            "agent_insights": orchestration.get("agent_insights", []),
+            "conservative_view": orchestration.get("conservative_view", ""),
+            "aggressive_view": orchestration.get("aggressive_view", ""),
         }
         
     except Exception as e:
