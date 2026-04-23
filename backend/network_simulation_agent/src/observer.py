@@ -283,7 +283,7 @@ def _compose_answer(
             "I am tracking this completed simulation run and can answer grounded questions.\n"
             "Try asking:\n"
             "- What happened in the last few days?\n"
-            "- Does the run support a 10% price increase?\n"
+            "- Which actions most influenced revenue, cost, and risk?\n"
             "- What risks should we monitor next?\n"
             f"Current trajectory: revenue {revenue:+.2%}, cost {cost:+.2%}, risk {risk:+.2%}."
         )

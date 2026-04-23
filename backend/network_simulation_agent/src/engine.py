@@ -9,6 +9,7 @@ from .memory import SESSION_STATE_SCHEMA_VERSION
 from .memory import append_event
 from .memory import build_session_id
 from .memory import get_run_dir
+from .model import get_observer_chat_model
 from .observer import persist_run_artifacts
 from .orchestrator import NetworkOrchestrator
 from .rules import validate_action
@@ -207,14 +208,47 @@ class NetworkSimulationEngine:
         self.recent_llm_events = self.recent_llm_events[-80:]
 
     def _observer_summary_text(self) -> str:
-        """Build deterministic observer summary from current KPIs and world state."""
-        price_signal = "supports" if self.kpis["revenue_delta"] > 0.015 else "does not support"
-        risk_signal = "contained" if self.kpis["risk_delta"] < 0.05 else "elevated"
+        """Build scenario-aware observer summary with model synthesis and deterministic fallback."""
+        revenue = float(self.kpis.get("revenue_delta", 0.0))
+        cost = float(self.kpis.get("cost_delta", 0.0))
+        risk = float(self.kpis.get("risk_delta", 0.0))
+        scenario = str(self.request.query).strip()
+        risk_signal = "contained" if risk < 0.05 else "elevated"
+
+        model = get_observer_chat_model()
+        if model is not None:
+            prompt = (
+                "You are the final observer for a completed business network simulation.\n"
+                "Write a concise final summary (2-3 sentences) for non-technical users.\n"
+                "Rules:\n"
+                "- Directly address the scenario in plain business language.\n"
+                "- Include revenue_delta, cost_delta, and risk_delta exactly once each.\n"
+                "- Provide one concrete next-step recommendation.\n"
+                "- Do not assume this is a pricing scenario unless explicitly stated.\n"
+                "- Do not use markdown.\n\n"
+                f"Scenario query: {scenario}\n"
+                f"Final KPI deltas: revenue_delta={revenue:+.2%}, cost_delta={cost:+.2%}, risk_delta={risk:+.2%}\n"
+                f"Recent events snapshot: {self.recent_llm_events[-8:]}"
+            )
+            try:
+                response = model.invoke(prompt)
+                content = getattr(response, "content", response)
+                if isinstance(content, list):
+                    content = "".join(
+                        str(item.get("text", "")) if isinstance(item, dict) else str(item) for item in content
+                    )
+                text = str(content).strip()
+                if text:
+                    return text[:1600]
+            except Exception:
+                pass
+
+        trend = "improving" if revenue > 0 and risk <= 0 else "mixed"
         return (
-            f"Observer: the network trajectory {price_signal} a controlled price increase, with "
-            f"revenue_delta={self.kpis['revenue_delta']:+.2%}, cost_delta={self.kpis['cost_delta']:+.2%}, "
-            f"risk_delta={self.kpis['risk_delta']:+.2%}. Operational risk is {risk_signal}; "
-            "recommended strategy is phased rollout with supplier negotiation and retention messaging."
+            f"Observer: for scenario \"{scenario}\", the network outcome is {trend}, with "
+            f"revenue_delta={revenue:+.2%}, cost_delta={cost:+.2%}, risk_delta={risk:+.2%}. "
+            f"Operational risk is {risk_signal}; recommended strategy is a staged rollout with clear guardrails, "
+            "tight supplier coordination, and retention-focused communication validated each tick."
         )
 
     def _day_summary_from_narratives(self, tick: int, tick_narratives: list[dict[str, str]]) -> str:
