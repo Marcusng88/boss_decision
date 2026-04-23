@@ -148,7 +148,7 @@ async def llm_health_check():
             detail={
                 "status": "unhealthy",
                 "llm_model": client.model,
-                "llm_endpoint_candidates": client.endpoint_candidates,
+                "llm_endpoint": client.base_url,
                 "error": str(exc),
             },
         )

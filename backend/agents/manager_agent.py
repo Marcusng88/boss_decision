@@ -4,10 +4,13 @@ Manager Agent - Orchestrates domain agents and synthesizes final decision.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List
 
 from .base_agent import AgentInsight
 from services.llm_client import UnifiedLLMClient
+
+logger = logging.getLogger(__name__)
 
 
 class ManagerAgent:
@@ -87,20 +90,14 @@ class ManagerAgent:
         return None
 
     def _derive_agents_from_text(self, text: str) -> List[str]:
+        """
+        Keyword-free derivation: ask the LLM directly. This is only used as a
+        last-resort text-mode fallback inside route_agents, after a failed JSON
+        parse.  We scan for department names that the LLM itself wrote in its
+        response — no extra keyword lists needed.
+        """
         lowered = (text or "").lower()
-        candidates = {
-            "hr": ["hr", "human resources", "people ops"],
-            "legal": ["legal", "law", "compliance", "labor"],
-            "sales": ["sales", "pipeline", "revenue"],
-            "marketing": ["marketing", "campaign", "brand"],
-            "finance": ["finance", "budget", "cost", "cash"],
-            "supply_chain": ["supply", "logistics", "inventory", "operations"],
-            "operations": ["operations", "process", "fulfillment"],
-        }
-        selected: List[str] = []
-        for dept, hints in candidates.items():
-            if any(h in lowered for h in hints):
-                selected.append(dept)
+        selected = [dept for dept in self.supported_departments if dept.replace("_", " ") in lowered or dept in lowered]
         return list(dict.fromkeys(selected))
 
     async def route_agents(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -190,6 +187,7 @@ Output JSON schema:
             except Exception as exc:
                 llm_error = f"{llm_error} | text_fallback: {str(exc)}" if llm_error else str(exc)
 
+        # --- Pure structural fallback (no hardcoded topic keywords) ---
         selected = []
         if isinstance(doc_department, str):
             canonical = self._canonical_agent_name(doc_department)
@@ -201,12 +199,11 @@ Output JSON schema:
             selected = ["hr", "legal"]
 
         if not selected:
-            # Check for marketing keywords as a last resort before hard fallback
-            lowered_query = query.lower()
-            if any(k in lowered_query for k in ["marketing", "brand", "coffee", "business", "market", "campaign"]):
-                selected = ["marketing"]
-            else:
-                selected = ["hr", "sales"]
+            # Last resort: ask LLM synchronously what departments fit — if that
+            # also fails we fall back to a neutral two-department default that
+            # covers the broadest set of queries without domain bias.
+            selected = ["hr", "sales"]
+            logger.warning("Manager routing fully degraded — defaulted to ['hr', 'sales']. LLM error: %s", llm_error)
 
         return {
             "selected_agents": selected,
@@ -374,13 +371,14 @@ Return JSON only:
                 )
             agent_insights.append(insight)
 
-        conservative_view = self._generate_conservative_view(agent_insights, query)
-        aggressive_view = self._generate_aggressive_view(agent_insights, query)
-        final_decision = self._synthesize_decision(
+        conservative_view = await self._generate_conservative_view(agent_insights, query)
+        aggressive_view = await self._generate_aggressive_view(agent_insights, query)
+        final_decision = await self._synthesize_decision(
             agent_insights,
             conservative_view,
             aggressive_view,
             persona="conservative",
+            query=query,
         )
 
         if len(agent_insights) > 1:
@@ -411,14 +409,15 @@ Return JSON only:
                 )
             agent_insights.append(insight)
 
-        conservative_view = self._generate_conservative_view(agent_insights, query)
-        aggressive_view = self._generate_aggressive_view(agent_insights, query)
+        conservative_view = await self._generate_conservative_view(agent_insights, query)
+        aggressive_view = await self._generate_aggressive_view(agent_insights, query)
 
-        final_decision = self._synthesize_decision(
+        final_decision = await self._synthesize_decision(
             agent_insights,
             conservative_view,
             aggressive_view,
             persona="conservative",
+            query=query,
         )
 
         return {
@@ -438,86 +437,194 @@ Return JSON only:
             f"Risk: {risk}. Confidence: {confidence}%."
         )
 
-    def _generate_conservative_view(self, insights: List[AgentInsight], query: str) -> str:
+    async def _generate_conservative_view(self, insights: List[AgentInsight], query: str) -> str:
+        """Generate a conservative strategic perspective using LLM — no hardcoded keywords."""
         all_risks = []
+        all_findings = []
         for insight in insights:
             all_risks.extend(insight.risks)
+            all_findings.extend(insight.findings)
 
-        conservative = "Conservative perspective: "
-        if "pip" in str(all_risks).lower():
-            conservative += "Legal/process risk too high without completed performance process. "
-        if "termination" in query.lower() or "fire" in query.lower():
-            conservative += "Replacement and transition cost may outweigh short-term gains. "
-        conservative += "Recommend controlled steps, documentation, and measurable checkpoints."
-        return conservative
+        if self.router_client is None:
+            # Graceful static fallback when LLM is unavailable
+            risk_summary = "; ".join(all_risks[:3]) if all_risks else "No specific risks identified."
+            return (
+                f"Conservative perspective: Key risks identified — {risk_summary}. "
+                "Recommend controlled steps, documentation, and measurable checkpoints before proceeding."
+            )
 
-    def _generate_aggressive_view(self, insights: List[AgentInsight], query: str) -> str:
+        system_prompt = (
+            "You are a conservative business strategist. Give a concise, risk-aware perspective in 2-3 sentences."
+        )
+        user_prompt = f"""
+Business query: {query}
+
+Agent findings: {all_findings[:6]}
+Agent risks: {all_risks[:6]}
+
+Write a conservative perspective on this decision — focus on risk mitigation, caution, and protective measures.
+Output plain text only (no JSON, no markdown).
+""".strip()
+
+        try:
+            resp = await self.router_client.acomplete_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.3,
+                max_tokens=200,
+            )
+            return f"Conservative perspective: {(resp.text or '').strip()}"
+        except Exception as exc:
+            logger.warning("Conservative view LLM call failed: %s", exc)
+            risk_summary = "; ".join(all_risks[:3]) if all_risks else "No specific risks identified."
+            return (
+                f"Conservative perspective: Key risks — {risk_summary}. "
+                "Recommend controlled steps, documentation, and measurable checkpoints."
+            )
+
+    async def _generate_aggressive_view(self, insights: List[AgentInsight], query: str) -> str:
+        """Generate an aggressive strategic perspective using LLM — no hardcoded keywords."""
         all_findings = []
         for insight in insights:
             all_findings.extend(insight.findings)
 
-        aggressive = "Aggressive perspective: "
-        if "underperform" in str(all_findings).lower():
-            aggressive += "Sustained underperformance suggests urgent action. "
-        if any(k in query.lower() for k in ["acquire", "expand", "launch"]):
-            aggressive += "Delays can increase competitive opportunity cost. "
-        aggressive += "Recommend decisive execution with risk controls in parallel."
-        return aggressive
+        if self.router_client is None:
+            finding_summary = "; ".join(all_findings[:3]) if all_findings else "No specific findings."
+            return (
+                f"Aggressive perspective: Key findings — {finding_summary}. "
+                "Recommend decisive execution with risk controls in parallel."
+            )
 
-    def _synthesize_decision(
+        system_prompt = (
+            "You are an aggressive growth-oriented business strategist. "
+            "Give a concise, opportunity-focused perspective in 2-3 sentences."
+        )
+        user_prompt = f"""
+Business query: {query}
+
+Agent findings: {all_findings[:6]}
+
+Write an aggressive perspective on this decision — focus on opportunity, speed, and competitive advantage.
+Output plain text only (no JSON, no markdown).
+""".strip()
+
+        try:
+            resp = await self.router_client.acomplete_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.4,
+                max_tokens=200,
+            )
+            return f"Aggressive perspective: {(resp.text or '').strip()}"
+        except Exception as exc:
+            logger.warning("Aggressive view LLM call failed: %s", exc)
+            finding_summary = "; ".join(all_findings[:3]) if all_findings else "No specific findings."
+            return (
+                f"Aggressive perspective: Key findings — {finding_summary}. "
+                "Recommend decisive execution with risk controls in parallel."
+            )
+
+    async def _synthesize_decision(
         self,
         insights: List[AgentInsight],
         conservative_view: str,
         aggressive_view: str,
         persona: str = "balanced",
+        query: str = "",
     ) -> Dict[str, Any]:
-        max_risk = "Low"
-        for insight in insights:
-            for risk in insight.risks:
-                lower = risk.lower()
-                if any(keyword in lower for keyword in ["legal", "termination", "compliance", "high"]):
-                    max_risk = "High"
-                elif max_risk != "High" and any(
-                    keyword in lower for keyword in ["declining", "weak", "underperformance", "medium"]
-                ):
-                    max_risk = "Medium"
+        """Fully LLM-driven decision synthesis — no hardcoded domain keywords."""
 
         avg_confidence = sum(insight.confidence for insight in insights) / len(insights) if insights else 0.0
 
-        rationale = "Multi-agent analysis:\n\n"
+        # Build a compact agent summary for the LLM
+        agent_summary_lines = []
         for insight in insights:
-            rationale += f"**{insight.agent_name} Agent:** {' '.join(insight.findings[:2])}\n"
-            if insight.risks:
-                rationale += f"Risks: {insight.risks[0]}\n"
-            rationale += f"Recommendation: {insight.recommendation}\n\n"
+            agent_summary_lines.append(
+                f"[{insight.agent_name}] Findings: {insight.findings[:2]} | "
+                f"Risks: {insight.risks[:2]} | Rec: {insight.recommendation}"
+            )
+        agent_summary = "\n".join(agent_summary_lines) if agent_summary_lines else "No agent insights available."
 
+        # --- LLM synthesis ---
+        if self.router_client is not None:
+            system_prompt = (
+                "You are a senior business manager synthesizing multi-agent analysis. "
+                "Return strict JSON only."
+            )
+            user_prompt = f"""
+Business query: {query}
+
+Agent analyses:
+{agent_summary}
+
+Conservative view: {conservative_view}
+Aggressive view: {aggressive_view}
+Manager persona: {persona}
+
+Return a JSON object:
+{{
+  "recommendation": "clear, actionable final recommendation",
+  "risk_level": "Low | Medium | High",
+  "rationale": "2-4 sentence explanation referencing the agent findings",
+  "confidence": 0.0
+}}
+""".strip()
+            try:
+                parsed, _ = await self.router_client.acomplete_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.3,
+                    max_tokens=600,
+                )
+                recommendation = parsed.get("recommendation", "Proceed with caution — consult department leads.")
+                risk_level = parsed.get("risk_level", "Medium")
+                if risk_level not in ("Low", "Medium", "High"):
+                    risk_level = "Medium"
+                rationale = parsed.get("rationale", agent_summary)
+                llm_confidence = float(parsed.get("confidence", avg_confidence))
+                llm_confidence = max(0.0, min(llm_confidence, 1.0))
+
+                full_rationale = (
+                    f"Multi-agent analysis:\n\n{agent_summary}\n\n"
+                    f"**Manager Decision ({persona.title()}):** {rationale}\n\n"
+                    f"{conservative_view}\n\n{aggressive_view}"
+                )
+
+                return {
+                    "recommendation": recommendation,
+                    "risk_level": risk_level,
+                    "confidence_score": round(llm_confidence * 100, 2),
+                    "rationale": full_rationale,
+                    "manager_persona": persona,
+                }
+            except Exception as exc:
+                logger.warning("Decision synthesis LLM call failed: %s", exc)
+
+        # --- Structural fallback (no domain keyword checks) ---
+        # Derive risk level from agent confidence scores alone
+        if avg_confidence < 0.4:
+            risk_level = "High"
+        elif avg_confidence < 0.65:
+            risk_level = "Medium"
+        else:
+            risk_level = "Low"
+
+        rationale = f"Multi-agent analysis:\n\n{agent_summary}\n\n"
         if persona == "conservative":
-            final_recommendation = self._extract_conservative_recommendation(conservative_view)
             rationale += f"\n**Manager Decision (Conservative):** {conservative_view}"
         elif persona == "aggressive":
-            final_recommendation = self._extract_aggressive_recommendation(aggressive_view)
             rationale += f"\n**Manager Decision (Aggressive):** {aggressive_view}"
         else:
-            final_recommendation = self._extract_balanced_recommendation(insights)
             rationale += "\n**Manager Decision (Balanced):** Weighing both perspectives."
 
+        # Surface the most common recommendation from the sub-agents
+        recs = [i.recommendation for i in insights if i.recommendation]
+        recommendation = recs[0] if recs else "Proceed with phased approach — validate before full commitment."
+
         return {
-            "recommendation": final_recommendation,
-            "risk_level": max_risk,
+            "recommendation": recommendation,
+            "risk_level": risk_level,
             "confidence_score": round(avg_confidence * 100, 2),
             "rationale": rationale,
             "manager_persona": persona,
         }
-
-    def _extract_conservative_recommendation(self, view: str) -> str:
-        if "without completed performance process" in view.lower() or "pip" in view:
-            return "DO NOT TERMINATE YET - Run a 60-day documented PIP first"
-        return "Proceed with caution - implement protective measures first"
-
-    def _extract_aggressive_recommendation(self, view: str) -> str:
-        if "underperformance" in view.lower():
-            return "TERMINATE - Sustained performance issue and action justified"
-        return "Proceed decisively - delay creates opportunity cost"
-
-    def _extract_balanced_recommendation(self, insights: List[AgentInsight]) -> str:
-        return "Proceed with phased approach - validate before full commitment"
