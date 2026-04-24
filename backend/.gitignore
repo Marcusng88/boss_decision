@@ -33,3 +33,6 @@ build/
 # Database (if using local PostgreSQL dumps)
 *.sql.backup
 *.dump
+
+# Local knowledge workspace (uploads, runtime files)
+workplaces/

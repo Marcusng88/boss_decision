@@ -11,7 +11,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Any, Dict, List, Optional
 import uvicorn
 import logging
 
@@ -90,17 +90,17 @@ class AnalyzeRequest(BaseModel):
     document_summary: Optional[str] = None
     # New fields for Group Chat modes
     mode: str = "hybrid"  # "hybrid" (dynamic) or "manual"
-    forced_agents: Optional[list[str]] = None
+    forced_agents: Optional[List[str]] = None
     document_department: Optional[str] = None
-    document_entities: Optional[list[dict]] = None
-    document_tags: Optional[list[str]] = None
+    document_entities: Optional[List[Dict[str, Any]]] = None
+    document_tags: Optional[List[str]] = None
 
 
 class EmployeeResponse(BaseModel):
     """Response model for employee endpoint."""
-    employee: dict
-    hr_records: list[dict]
-    sales_records: list[dict]
+    employee: Dict[str, Any]
+    hr_records: List[Dict[str, Any]]
+    sales_records: List[Dict[str, Any]]
 
 
 # ============================================
@@ -238,13 +238,13 @@ async def analyze_query(request: AnalyzeRequest):
 @app.post("/api/analyze/upload")
 async def analyze_query_with_upload(
     query: str = Form(...),
-    context: str | None = Form(default=None),
-    target_type: str | None = Form(default=None),
-    target_id: int | None = Form(default=None),
-    submitted_by: str | None = Form(default="frontend"),
+    context: Optional[str] = Form(default=None),
+    target_type: Optional[str] = Form(default=None),
+    target_id: Optional[int] = Form(default=None),
+    submitted_by: Optional[str] = Form(default="frontend"),
     mode: str = Form(default="hybrid"),
-    forced_agents_json: str | None = Form(default=None, alias="forced_agents"),
-    document: UploadFile | None = File(default=None),
+    forced_agents_json: Optional[str] = Form(default=None, alias="forced_agents"),
+    document: Optional[UploadFile] = File(default=None),
 ):
     """Analyze decision query with optional uploaded file context."""
     # Parse forced_agents from JSON if provided
@@ -298,14 +298,14 @@ async def analyze_query_with_upload(
 async def _run_analysis(
     *,
     query: str,
-    context: str | None,
-    target_type: str | None,
-    target_id: int | None,
-    submitted_by: str | None,
-    document_analysis: dict | None,
+    context: Optional[str],
+    target_type: Optional[str],
+    target_id: Optional[int],
+    submitted_by: Optional[str],
+    document_analysis: Optional[Dict[str, Any]],
     knowledge_service: LocalKnowledgeService,
     mode: str = "hybrid",
-    forced_agents: list[str] | None = None,
+    forced_agents: Optional[List[str]] = None,
 ):
     case = await knowledge.create_decision_case(
         question=query,
