@@ -111,7 +111,8 @@ Methods for all tables:
 | `get_employee(id)` | `employee` |
 | `search_employees_by_name(name)` | `employee` — ILIKE search across name fields |
 | `get_employee_hr_records(id)` | `hr_record` |
-| `get_employee_sales_records(id)` | `sales_record` |
+| `get_employee_sales_records(id, period?)` | `sales_record` — filtered by employee |
+| `get_all_sales_records(period?, limit?)` | `sales_record` — company-wide, optionally filtered by period |
 | `get_legal_policies(category?)` | `legal_policy` ← **renamed from `legal_record`** |
 | `get_legal_contracts(employee_id?)` | `legal_contract` |
 | `get_legal_cases(employee_id?)` | `legal_cases` |
@@ -142,6 +143,13 @@ Methods for all tables:
 | Marketing | `marketing_agent.py` | `marketing_record` | ✅ | Rule-based |
 | Supply Chain | `supply_chain_agent.py` | `supply_record` | ✅ | Rule-based |
 | Manager | `manager_agent.py` | — (orchestrator) | ✅ LLM synthesis | Rule-based synthesis |
+
+### Sales Agent Data Retrieval (`sales_agent.py`)
+
+Two-path lookup:
+1. Employee-specific: `get_employee_sales_records(employee_id, period?)` when `target_type == 'employee'` and `target_id` is set
+2. General/company-wide: `get_all_sales_records(period?)` for all other queries (e.g. "Q1 pipeline performance")
+   - Period auto-extracted from query text via regex: matches "Q1", "Q4 2025", "2026-Q1" formats; standalone quarter assumes current year (2026)
 
 ### HR Agent Data Retrieval (`hr_agent.py`)
 
@@ -344,6 +352,7 @@ ZHIPU_MODEL=ilmu-glm-5.1
 - Manager agent lazy-loads domain agents on first instantiation
 - CORS allows `localhost:8080` and `localhost:8081` (Vite may use either)
 - Finance records in Supabase may not be keyed to individual employees — agent now cascades to dept/general level automatically
+- Sales agent previously returned "No sales records found" for general queries (no employee target) — fixed: non-employee queries now call `get_all_sales_records()` with optional period filter extracted from the query text
 - `AGENT_COLORS` in `AgentAvatar.tsx` is the single source of truth for per-agent color theming across the entire UI
 - SSE streaming uses `asyncio.create_task` inside the FastAPI generator — works correctly with uvicorn's async event loop
 - 78% of session usage comes from subagent-heavy operations — spawn subagents sparingly

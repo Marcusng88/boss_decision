@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { Shield, Flame, CheckCircle2, Brain } from "lucide-react";
+import { Shield, Flame, CheckCircle2 } from "lucide-react";
 import type { AnalysisResponse, StreamingState } from "@/lib/api";
 import { AgentCard, AgentCardSkeleton } from "./AgentCard";
 import { AgentAvatar, AGENT_COLORS } from "./AgentAvatar";
@@ -37,42 +37,35 @@ const ThinkingBar = ({ status, agents_invoked, active_agents }: {
   agents_invoked: string[];
   active_agents: string[];
 }) => (
-  <div className="space-y-3">
-    <div className="flex items-center gap-2.5">
-      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center shrink-0 shadow-md">
-        <Brain className="w-4 h-4 text-white animate-pulse" />
+  <div className="space-y-2">
+    <p className="text-sm font-medium text-foreground">{status}</p>
+    {agents_invoked.length > 0 && (
+      <div className="flex flex-wrap gap-1">
+        {agents_invoked.map((a) => {
+          const isRunning = active_agents.includes(a);
+          const colors = AGENT_COLORS[a] || AGENT_COLORS.hr;
+          return (
+            <span
+              key={a}
+              className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium transition-all
+                ${isRunning
+                  ? `bg-gradient-to-r ${colors.gradient} text-white shadow-sm`
+                  : "bg-gray-100 text-gray-500"
+                }`}
+            >
+              <AgentAvatar agentName={a} size={12} />
+              <span className="capitalize">{a.replace("_", " ")}</span>
+              {isRunning && (
+                <svg className="w-2.5 h-2.5 animate-spin ml-0.5" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-30" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+              )}
+            </span>
+          );
+        })}
       </div>
-      <div className="flex-1">
-        <p className="text-sm font-medium text-foreground">{status}</p>
-        {agents_invoked.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1">
-            {agents_invoked.map((a) => {
-              const isRunning = active_agents.includes(a);
-              const colors = AGENT_COLORS[a] || AGENT_COLORS.hr;
-              return (
-                <span
-                  key={a}
-                  className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium transition-all
-                    ${isRunning
-                      ? `bg-gradient-to-r ${colors.gradient} text-white shadow-sm`
-                      : "bg-gray-100 text-gray-500"
-                    }`}
-                >
-                  <AgentAvatar agentName={a} size={12} />
-                  <span className="capitalize">{a.replace("_", " ")}</span>
-                  {isRunning && (
-                    <svg className="w-2.5 h-2.5 animate-spin ml-0.5" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-30" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                    </svg>
-                  )}
-                </span>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+    )}
   </div>
 );
 

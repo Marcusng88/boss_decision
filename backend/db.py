@@ -80,6 +80,12 @@ class DatabaseService:
             query = query.eq('period', period)
         return query.execute().data
 
+    async def get_all_sales_records(self, period: str = None, limit: int = 50):
+        query = self.client.table('sales_record').select('*')
+        if period:
+            query = query.eq('period', period)
+        return query.order('period', desc=True).limit(limit).execute().data
+
     # ── Legal ─────────────────────────────────────────────────────────────
 
     async def get_legal_policies(self, category: str = None):
@@ -116,23 +122,23 @@ class DatabaseService:
 
     # ── Marketing ─────────────────────────────────────────────────────────
 
-    async def get_marketing_records(self, period: str = None, campaign_name: str = None):
+    async def get_marketing_records(self, period: str = None, campaign_name: str = None, limit: int = 20):
         query = self.client.table('marketing_record').select('*')
         if period:
             query = query.eq('period', period)
         if campaign_name:
             query = query.ilike('campaign_name', f'%{campaign_name}%')
-        return query.order('period', desc=True).execute().data
+        return query.order('period', desc=True).limit(limit).execute().data
 
     # ── Supply Chain ──────────────────────────────────────────────────────
 
-    async def get_supply_records(self, period: str = None, item_name: str = None):
+    async def get_supply_records(self, period: str = None, item_name: str = None, limit: int = 20):
         query = self.client.table('supply_record').select('*')
         if period:
             query = query.eq('period', period)
         if item_name:
             query = query.ilike('item_name', f'%{item_name}%')
-        return query.execute().data
+        return query.order('period', desc=True).limit(limit).execute().data
 
     # ── Decision Case ─────────────────────────────────────────────────────
 

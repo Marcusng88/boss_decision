@@ -1,5 +1,6 @@
 """Sales Agent — revenue, deals, pipeline, quota attainment."""
 import json
+import re
 from typing import Dict, List, Any
 from .base_agent import BaseAgent, AgentInsight
 from .llm_client import llm_json
@@ -22,11 +23,33 @@ Currency is Malaysian Ringgit (RM).
 
 class SalesAgent(BaseAgent):
 
+    def _extract_period(self, query: str) -> str | None:
+        """Extract period like '2026-Q1' from query text."""
+        # Match explicit "2026-Q1" format
+        m = re.search(r'(20\d{2})[-\s]?(Q[1-4])', query, re.IGNORECASE)
+        if m:
+            return f"{m.group(1)}-{m.group(2).upper()}"
+        # Match standalone quarter like "Q1", "Q3" — assume current year 2026
+        m = re.search(r'\b(Q[1-4])\b', query, re.IGNORECASE)
+        if m:
+            return f"2026-{m.group(1).upper()}"
+        return None
+
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         evidence = []
+        period = self._extract_period(query)
+
         if context.get('target_type') == 'employee' and context.get('target_id'):
             employee_id = context['target_id']
-            records = await self.db.get_employee_sales_records(employee_id)
+            records = await self.db.get_employee_sales_records(employee_id, period=period)
+            evidence.extend([
+                {'source': 'sales_record', 'type': 'deal',
+                 'record_id': r.get('sales_id'), 'data': r}
+                for r in records
+            ])
+        else:
+            # General or department-level query — fetch all sales records
+            records = await self.db.get_all_sales_records(period=period)
             evidence.extend([
                 {'source': 'sales_record', 'type': 'deal',
                  'record_id': r.get('sales_id'), 'data': r}

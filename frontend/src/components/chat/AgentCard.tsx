@@ -26,8 +26,8 @@ export const AgentCard = ({ insight, style, isActive }: AgentCardProps) => {
       style={style}
     >
       {/* Gradient header with cartoon avatar */}
-      <div className={`relative bg-gradient-to-br ${colors.gradient} p-4 flex items-center gap-3`}>
-        {/* Avatar with bounce */}
+      <div className={`relative bg-gradient-to-br ${colors.gradient} p-4 flex items-start gap-3`}>
+        {/* Avatar */}
         <div className="relative shrink-0 drop-shadow-lg" style={{ filter: "drop-shadow(0 4px 8px rgba(0,0,0,0.25))" }}>
           <AgentAvatar agentName={key} size={56} />
           {isActive && (
@@ -35,23 +35,20 @@ export const AgentCard = ({ insight, style, isActive }: AgentCardProps) => {
           )}
         </div>
 
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 flex flex-col gap-1.5">
           <h3 className="text-white font-bold text-sm leading-tight">
             {insight.agent_name} Agent
           </h3>
-          <p className="text-white/75 text-xs mt-0.5 leading-snug line-clamp-2">
+          <p className="text-white/75 text-xs leading-snug line-clamp-2">
             {insight.data_summary || "Analyzing data..."}
           </p>
-        </div>
-
-        {insight.metric_value && (
-          <div className="shrink-0 bg-white/20 backdrop-blur-sm rounded-xl px-2.5 py-1.5 text-right">
-            <div className="flex items-center gap-1 justify-end">
+          {insight.metric_value && (
+            <div className="inline-flex self-start items-center gap-1 bg-white/20 backdrop-blur-sm rounded-xl px-2.5 py-1">
               <TrendIcon trend={insight.trend} />
-              <span className="text-white font-bold text-xs">{insight.metric_value}</span>
+              <span className="text-white font-bold text-xs leading-tight">{insight.metric_value}</span>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Card body */}
