@@ -148,37 +148,37 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
   }, []);
 
   return (
-    <Card className="border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-white shadow-lg h-full">
+    <Card className="border border-gray-200/40 bg-white/70 backdrop-blur-sm shadow-lg shadow-gray-900/5 rounded-2xl transition-all duration-300 hover:shadow-xl hover:shadow-gray-900/10">
       <div className="p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-lg bg-orange-400 flex items-center justify-center">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-orange-400/90 to-orange-500/90 flex items-center justify-center shadow-md shadow-orange-500/20">
             <Upload className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Upload</h2>
-            <p className="text-xs text-gray-600">
+            <h2 className="text-lg font-semibold text-gray-800 tracking-tight">Upload</h2>
+            <p className="text-xs text-gray-500 font-light">
               AI extraction
             </p>
           </div>
         </div>
 
         {/* Custom Extraction Field */}
-        <div className="space-y-2 mb-4">
+        <div className="space-y-2 mb-5">
           <Label htmlFor="custom-extraction" className="flex items-center gap-2 text-sm font-medium text-gray-700">
-            <Sparkles className="w-4 h-4 text-orange-600" />
+            <Sparkles className="w-4 h-4 text-orange-500" />
             What specific data do you want to extract? (Optional)
           </Label>
           <Input
             id="custom-extraction"
             type="text"
-            placeholder="e.g., team morale score, customer satisfaction rating, budget approval status..."
+            placeholder="e.g., team morale score, customer satisfaction rating..."
             value={customExtraction}
             onChange={(e) => setCustomExtraction(e.target.value)}
             disabled={uploading}
-            className="border-orange-200 focus:border-orange-400 focus:ring-orange-400"
+            className="border-gray-200/50 bg-white/80 focus:border-orange-300 focus:ring-orange-300/30 rounded-xl transition-all duration-200"
           />
-          <p className="text-xs text-gray-500">
-            If this data doesn't match a standard column, the AI will save it in the justification field for reference.
+          <p className="text-xs text-gray-500 font-light">
+            Custom data will be saved in the AI justification field for reference.
           </p>
         </div>
 
@@ -188,9 +188,9 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={`
-            relative border-2 border-dashed rounded-xl p-8 text-center transition-all
-            ${isDragging ? "border-orange-500 bg-orange-100" : "border-orange-300 bg-white/50"}
-            ${uploading ? "pointer-events-none" : "cursor-pointer hover:border-orange-400 hover:bg-orange-50"}
+            relative border border-dashed rounded-2xl p-8 text-center transition-all duration-300
+            ${isDragging ? "border-orange-400 bg-orange-50/50 scale-[1.02]" : "border-gray-300/60 bg-gradient-to-br from-gray-50/50 to-white/50"}
+            ${uploading ? "pointer-events-none" : "cursor-pointer hover:border-orange-300 hover:bg-orange-50/30 hover:shadow-inner"}
           `}
         >
           <input
@@ -204,16 +204,16 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
 
           {!uploading && uploadStatus === "idle" && (
             <label htmlFor="file-upload" className="cursor-pointer">
-              <div className="w-14 h-14 mx-auto rounded-2xl bg-orange-100 flex items-center justify-center mb-3">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-orange-100/80 to-orange-200/60 flex items-center justify-center mb-3 shadow-sm">
                 <File className="w-7 h-7 text-orange-600" />
               </div>
-              <p className="text-base font-semibold text-gray-900 mb-1">
+              <p className="text-base font-medium text-gray-700 mb-1">
                 Drop files here
               </p>
-              <p className="text-xs text-gray-600">
+              <p className="text-xs text-gray-500 font-light">
                 or click to browse
               </p>
-              <p className="text-xs text-gray-500 mt-2">
+              <p className="text-xs text-gray-400 mt-2 font-light">
                 PDF, Word, Excel, Images
               </p>
             </label>
@@ -221,9 +221,9 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
 
           {uploading && uploadStatus === "idle" && (
             <div className="space-y-4">
-              <Loader2 className="w-12 h-12 mx-auto text-orange-600 animate-spin" />
-              <p className="text-lg font-semibold text-gray-900">{currentStage}</p>
-              <p className="text-sm text-gray-600">
+              <Loader2 className="w-12 h-12 mx-auto text-orange-500 animate-spin" />
+              <p className="text-base font-medium text-gray-700">{currentStage}</p>
+              <p className="text-sm text-gray-500 font-light">
                 {progress < 20 ? "Uploading file to cloud..." :
                  progress < 40 ? "AI is reading your document..." :
                  progress < 70 ? "This may take 30-60 seconds for AI processing" :
@@ -231,8 +231,8 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
                  "Finalizing..."}
               </p>
               <div className="max-w-md mx-auto">
-                <Progress value={progress} className="h-2" />
-                <p className="text-xs text-gray-500 mt-2 text-center">
+                <Progress value={progress} className="h-1.5 bg-gray-200/50" />
+                <p className="text-xs text-gray-400 mt-2 text-center font-light">
                   {Math.round(progress)}% complete
                 </p>
               </div>
@@ -241,21 +241,21 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
 
           {uploadStatus === "success" && (
             <div className="space-y-4">
-              <div className="w-16 h-16 mx-auto rounded-full bg-green-100 flex items-center justify-center">
+              <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-green-100/80 to-emerald-100/60 flex items-center justify-center shadow-sm">
                 <Check className="w-8 h-8 text-green-600" />
               </div>
-              <p className="text-lg font-semibold text-gray-900">Upload successful!</p>
-              <p className="text-sm text-gray-600">Document processed and data extracted</p>
+              <p className="text-base font-medium text-gray-700">Upload successful!</p>
+              <p className="text-sm text-gray-500 font-light">Document processed and data extracted</p>
             </div>
           )}
 
           {uploadStatus === "error" && (
             <div className="space-y-4">
-              <div className="w-16 h-16 mx-auto rounded-full bg-red-100 flex items-center justify-center">
+              <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-red-100/80 to-rose-100/60 flex items-center justify-center shadow-sm">
                 <X className="w-8 h-8 text-red-600" />
               </div>
-              <p className="text-lg font-semibold text-gray-900">Upload failed</p>
-              <p className="text-sm text-gray-600">Please try again</p>
+              <p className="text-base font-medium text-gray-700">Upload failed</p>
+              <p className="text-sm text-gray-500 font-light">Please try again</p>
             </div>
           )}
         </div>

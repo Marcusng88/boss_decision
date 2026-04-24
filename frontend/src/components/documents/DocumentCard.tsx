@@ -126,52 +126,52 @@ export const DocumentCard = ({ document, onDelete }: DocumentCardProps) => {
   const fileType = getFileType(document.file_path);
 
   return (
-    <Card className="border-2 border-orange-100 hover:border-orange-300 hover:shadow-lg transition-all bg-white overflow-hidden">
+    <Card className="border border-gray-200/40 hover:border-orange-200/60 hover:shadow-lg hover:shadow-gray-900/10 transition-all duration-300 bg-white/80 backdrop-blur-sm overflow-hidden rounded-2xl hover:scale-[1.02]">
       {/* Cloudinary Preview (works for images, PDFs, and documents) */}
       {previewUrl && !imageError ? (
         <div 
-          className="w-full h-48 bg-gray-100 overflow-hidden cursor-pointer group"
+          className="w-full h-48 bg-gradient-to-br from-gray-100/50 to-gray-50/30 overflow-hidden cursor-pointer group"
           onClick={() => window.open(document.file_path, "_blank")}
         >
           <img 
             src={previewUrl} 
             alt={document.title}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
             onError={() => setImageError(true)}
           />
         </div>
       ) : (
         // Fallback for non-Cloudinary files or unsupported types
         <div 
-          className="w-full h-48 bg-gradient-to-br from-gray-50 to-gray-100 overflow-hidden cursor-pointer hover:from-gray-100 hover:to-gray-200 transition-colors flex items-center justify-center"
+          className="w-full h-48 bg-gradient-to-br from-gray-50/70 to-white/50 overflow-hidden cursor-pointer hover:from-orange-50/30 hover:to-amber-50/20 transition-all duration-300 flex items-center justify-center"
           onClick={() => window.open(document.file_path, "_blank")}
         >
           <div className="text-center">
             {fileType === 'pdf' && (
               <>
-                <FileText className="w-16 h-16 text-red-600 mx-auto mb-2" />
-                <p className="text-sm font-medium text-gray-700">PDF Document</p>
+                <FileText className="w-14 h-14 text-red-500/80 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-600">PDF Document</p>
               </>
             )}
             {fileType === 'document' && (
               <>
-                <File className="w-16 h-16 text-blue-600 mx-auto mb-2" />
-                <p className="text-sm font-medium text-gray-700">Document</p>
+                <File className="w-14 h-14 text-blue-500/80 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-600">Document</p>
               </>
             )}
             {fileType === 'spreadsheet' && (
               <>
-                <FileText className="w-16 h-16 text-green-600 mx-auto mb-2" />
-                <p className="text-sm font-medium text-gray-700">Spreadsheet</p>
+                <FileText className="w-14 h-14 text-green-500/80 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-600">Spreadsheet</p>
               </>
             )}
             {fileType === 'unknown' && (
               <>
-                <File className="w-16 h-16 text-gray-600 mx-auto mb-2" />
-                <p className="text-sm font-medium text-gray-700">File</p>
+                <File className="w-14 h-14 text-gray-500/80 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-600">File</p>
               </>
             )}
-            <p className="text-xs text-gray-500 mt-1">Click to view</p>
+            <p className="text-xs text-gray-400 mt-1 font-light">Click to view</p>
           </div>
         </div>
       )}
@@ -179,29 +179,29 @@ export const DocumentCard = ({ document, onDelete }: DocumentCardProps) => {
       <div className="p-4 space-y-3">
         {/* Header */}
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center flex-shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-100/80 to-orange-200/60 flex items-center justify-center flex-shrink-0 shadow-sm">
             <FileText className="w-5 h-5 text-orange-600" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-gray-900 truncate" title={document.title}>
+            <h3 className="font-medium text-gray-700 truncate text-sm" title={document.title}>
               {document.title}
             </h3>
-            <Badge className={`mt-1 text-xs border ${getDocTypeColor(document.doc_type)}`}>
+            <Badge className={`mt-1.5 text-xs border ${getDocTypeColor(document.doc_type)}`}>
               {document.doc_type}
             </Badge>
           </div>
         </div>
 
         {/* Metadata */}
-        <div className="space-y-1 text-sm text-gray-600">
+        <div className="space-y-1.5 text-sm text-gray-500">
           <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4" />
-            <span>Uploaded: {formatDate(document.created_at)}</span>
+            <Calendar className="w-3.5 h-3.5 text-gray-400" />
+            <span className="text-xs font-light">Uploaded: {formatDate(document.created_at)}</span>
           </div>
           {document.extracted_at && (
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-green-500" />
-              <span className="text-xs">Processed & extracted</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
+              <span className="text-xs font-light text-emerald-600">Processed & extracted</span>
             </div>
           )}
         </div>
@@ -211,10 +211,10 @@ export const DocumentCard = ({ document, onDelete }: DocumentCardProps) => {
           <Button
             variant="outline"
             size="sm"
-            className="flex-1 text-orange-700 border-orange-300 hover:bg-orange-50 hover:text-orange-800"
+            className="flex-1 text-orange-600 border-orange-200/60 hover:bg-gradient-to-br hover:from-orange-50/50 hover:to-amber-50/30 hover:text-orange-700 rounded-xl transition-all duration-200 hover:border-orange-300/80 shadow-sm"
             onClick={() => window.open(document.file_path, "_blank")}
           >
-            <ExternalLink className="w-4 h-4 mr-2" />
+            <ExternalLink className="w-3.5 h-3.5 mr-2" />
             View
           </Button>
           
@@ -223,24 +223,24 @@ export const DocumentCard = ({ document, onDelete }: DocumentCardProps) => {
               <Button
                 variant="outline"
                 size="sm"
-                className="text-red-600 border-red-300 hover:bg-red-50 hover:text-red-700"
+                className="text-red-500 border-red-200/60 hover:bg-gradient-to-br hover:from-red-50/50 hover:to-rose-50/30 hover:text-red-600 rounded-xl transition-all duration-200 hover:border-red-300/80 shadow-sm"
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </AlertDialogTrigger>
-            <AlertDialogContent>
+            <AlertDialogContent className="rounded-2xl border-gray-200/40 shadow-2xl">
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete document?</AlertDialogTitle>
-                <AlertDialogDescription>
+                <AlertDialogTitle className="text-gray-800">Delete document?</AlertDialogTitle>
+                <AlertDialogDescription className="text-gray-500 font-light">
                   This will permanently delete "{document.title}" and all related data.
                   This action cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogCancel className="rounded-xl border-gray-200/60 hover:bg-gray-50 transition-all duration-200">Cancel</AlertDialogCancel>
                 <AlertDialogAction
                   onClick={handleDelete}
-                  className="bg-red-600 hover:bg-red-700"
+                  className="bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-xl shadow-md shadow-red-500/20 transition-all duration-200"
                 >
                   Delete
                 </AlertDialogAction>
