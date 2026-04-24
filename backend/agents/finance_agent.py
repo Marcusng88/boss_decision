@@ -1,5 +1,6 @@
 """Finance Agent — budgets, costs, financial KPIs, ROI."""
 import json
+import re
 from typing import Dict, List, Any
 from .base_agent import BaseAgent, AgentInsight
 from .llm_client import llm_json
@@ -22,12 +23,29 @@ Currency is Malaysian Ringgit (RM).
 
 class FinanceAgent(BaseAgent):
 
+    async def _resolve_employee_id(self, context: Dict[str, Any]) -> int | None:
+        """Resolve employee_id from context — direct ID first, name search as fallback."""
+        if context.get('target_type') == 'employee':
+            if context.get('target_id'):
+                return int(context['target_id'])
+            if context.get('target_name'):
+                raw = re.sub(r'employee\s*#?\d*\s*', '', str(context['target_name']),
+                             flags=re.IGNORECASE).strip()
+                if raw and not raw.isdigit():
+                    try:
+                        results = await self.db.search_employees_by_name(raw)
+                        if results:
+                            return results[0].get('employee_id')
+                    except Exception:
+                        pass
+        return None
+
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         evidence = []
-        emp_id = context.get('target_id') if context.get('target_type') == 'employee' else None
+        emp_id = await self._resolve_employee_id(context)
 
-        # Try employee-level finance records first
         if emp_id:
+            # Employee-specific query: try employee records, then dept for context only
             try:
                 records = await self.db.get_finance_records(employee_id=emp_id)
                 if records:
@@ -39,34 +57,37 @@ class FinanceAgent(BaseAgent):
             except Exception:
                 pass
 
-        # Fall back to department-level finance records if nothing found for employee
-        if not evidence and emp_id:
-            try:
-                employee = await self.db.get_employee(emp_id)
-                dept_id = employee.get('dept_id') if employee else None
-                if dept_id:
-                    records = await self.db.get_finance_records(dept_id=dept_id)
-                    if records:
-                        evidence.extend([
-                            {'source': 'finance_record', 'type': 'department_finance',
-                             'record_id': r.get('finance_id'), 'data': r}
-                            for r in records[:10]
-                        ])
-            except Exception:
-                pass
+            if not evidence:
+                # Department-level as context (salary bands, budget), not as a replacement
+                try:
+                    employee = await self.db.get_employee(emp_id)
+                    dept_id = employee.get('dept_id') if employee else None
+                    if dept_id:
+                        records = await self.db.get_finance_records(dept_id=dept_id)
+                        if records:
+                            evidence.extend([
+                                {'source': 'finance_record', 'type': 'department_finance',
+                                 'record_id': r.get('finance_id'), 'data': r}
+                                for r in records[:10]
+                            ])
+                except Exception:
+                    pass
 
-        # Last resort: fetch general recent finance records
-        if not evidence:
-            try:
-                records = await self.db.get_finance_records()
-                if records:
-                    evidence.extend([
-                        {'source': 'finance_record', 'type': 'general_finance',
-                         'record_id': r.get('finance_id'), 'data': r}
-                        for r in records[:8]
-                    ])
-            except Exception:
-                pass
+            # Do NOT cascade to general records for employee-specific queries —
+            # irrelevant records from other employees would pollute the analysis
+            return evidence
+
+        # General / company-wide query: fetch recent finance records
+        try:
+            records = await self.db.get_finance_records()
+            if records:
+                evidence.extend([
+                    {'source': 'finance_record', 'type': 'general_finance',
+                     'record_id': r.get('finance_id'), 'data': r}
+                    for r in records[:20]
+                ])
+        except Exception:
+            pass
 
         return evidence
 

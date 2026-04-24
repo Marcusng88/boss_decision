@@ -122,7 +122,7 @@ class DatabaseService:
 
     # ── Marketing ─────────────────────────────────────────────────────────
 
-    async def get_marketing_records(self, period: str = None, campaign_name: str = None, limit: int = 20):
+    async def get_marketing_records(self, period: str = None, campaign_name: str = None, limit: int = 50):
         query = self.client.table('marketing_record').select('*')
         if period:
             query = query.eq('period', period)
@@ -132,7 +132,7 @@ class DatabaseService:
 
     # ── Supply Chain ──────────────────────────────────────────────────────
 
-    async def get_supply_records(self, period: str = None, item_name: str = None, limit: int = 20):
+    async def get_supply_records(self, period: str = None, item_name: str = None, limit: int = 50):
         query = self.client.table('supply_record').select('*')
         if period:
             query = query.eq('period', period)

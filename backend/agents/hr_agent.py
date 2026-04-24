@@ -6,17 +6,18 @@ from .base_agent import BaseAgent, AgentInsight
 from .llm_client import llm_json
 
 SYSTEM_PROMPT = """You are an HR specialist analyst for an AI business decision engine.
-Analyze the HR records provided and return ONLY valid JSON with no extra text:
+Analyze the employee profile and HR records provided and return ONLY valid JSON with no extra text:
 {
   "findings": ["finding1", "finding2", "finding3"],
   "risks": ["risk1", "risk2"],
   "recommendation": "single actionable recommendation",
   "confidence": 0.75,
-  "data_summary": "brief 3-5 word summary",
+  "data_summary": "brief 3-5 word summary e.g. 'Senior engineer, Dept A'",
   "metric_value": "key metric e.g. '2.1/5 score'",
   "trend": "up or down or flat"
 }
-Focus on: performance scores, attendance, warning history, PIP status, termination eligibility.
+Cover: employee name/role/department/tenure (from profile), performance scores, attendance, warning history, PIP status.
+If the query asks for basic employee info, include position, department, hire date, and employment status in findings.
 """
 
 
@@ -72,15 +73,24 @@ class HRAgent(BaseAgent):
                 name = (employee_profile.get('name')
                         or employee_profile.get('full_name')
                         or 'Unknown')
+                position = employee_profile.get('position') or employee_profile.get('job_title') or 'Unknown position'
+                dept = (employee_profile.get('department', {}) or {}).get('name', '') if isinstance(employee_profile.get('department'), dict) else employee_profile.get('dept_id', '')
+                hire_date = employee_profile.get('hire_date') or employee_profile.get('start_date') or 'Unknown'
+                status = employee_profile.get('employment_status') or employee_profile.get('status') or 'Active'
+                findings = [
+                    f"Employee: {name} — {position}",
+                    f"Department: {dept}" if dept else "Department: Not specified",
+                    f"Hire date: {hire_date} | Status: {status}",
+                    "No performance review records on file",
+                ]
                 return AgentInsight(
                     agent_name="HR", emoji="👤",
-                    findings=[f"Employee found: {name}",
-                               "No performance review records on file"],
+                    findings=findings,
                     risks=["Lack of HR records limits performance assessment"],
                     recommendation="Initiate formal performance tracking before making personnel decisions",
-                    confidence=0.2,
+                    confidence=0.3,
                     evidence_used=evidence,
-                    data_summary="No HR records on file",
+                    data_summary=f"{name}, {position}",
                 )
             return AgentInsight(
                 agent_name="HR", emoji="👤",
@@ -90,8 +100,9 @@ class HRAgent(BaseAgent):
                 confidence=0.0,
             )
 
+        profile_str = json.dumps(employee_profile, default=str, indent=2) if employee_profile else "Not available"
         data_str = json.dumps(hr_records, default=str, indent=2)
-        user_msg = f"Query: {query}\n\nHR Records:\n{data_str}"
+        user_msg = f"Query: {query}\n\nEmployee Profile:\n{profile_str}\n\nHR Records:\n{data_str}"
 
         try:
             result = await llm_json(SYSTEM_PROMPT, user_msg)

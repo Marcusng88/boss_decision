@@ -144,26 +144,42 @@ Methods for all tables:
 | Supply Chain | `supply_chain_agent.py` | `supply_record` | ✅ | Rule-based |
 | Manager | `manager_agent.py` | — (orchestrator) | ✅ LLM synthesis | Rule-based synthesis |
 
-### Sales Agent Data Retrieval (`sales_agent.py`)
+### Employee ID Resolution Pattern (`_resolve_employee_id`)
 
-Two-path lookup:
-1. Employee-specific: `get_employee_sales_records(employee_id, period?)` when `target_type == 'employee'` and `target_id` is set
-2. General/company-wide: `get_all_sales_records(period?)` for all other queries (e.g. "Q1 pipeline performance")
-   - Period auto-extracted from query text via regex: matches "Q1", "Q4 2025", "2026-Q1" formats; standalone quarter assumes current year (2026)
+**All employee-aware agents** (HR, Finance, Sales, Legal) share this pattern:
+1. Use `context['target_id']` directly if set (query has explicit `#ID`)
+2. If only `target_name` is set, call `search_employees_by_name()` to resolve name → ID
+3. Return `None` if not an employee query or name not found
+
+This means queries like "Who is Fatimah Wong?" (no explicit ID) resolve correctly in all agents.
 
 ### HR Agent Data Retrieval (`hr_agent.py`)
 
-Three-step lookup:
-1. Direct `employee_id` lookup if `target_id` is set
-2. Name-based ILIKE search via `search_employees_by_name()` if `target_name` is set but no ID
-3. Returns informative message if employee found but no HR records exist
+1. Resolve employee_id via `_resolve_employee_id` pattern
+2. Fetch `employee` profile + `hr_record` rows
+3. LLM receives both profile data and HR records — answers basic employee info AND performance
+4. If employee found but no HR records: surfaces profile fields (name, position, dept, hire date, status) as findings
+
+### Sales Agent Data Retrieval (`sales_agent.py`)
+
+1. Resolve employee_id via `_resolve_employee_id` pattern
+2. Employee-specific: `get_employee_sales_records(employee_id, period?)`
+3. General/company-wide (no employee): `get_all_sales_records(period?)` — period auto-extracted from query text ("Q1" → "2026-Q1")
 
 ### Finance Agent Data Retrieval (`finance_agent.py`)
 
-Three-level cascade:
+Employee-specific path (when employee resolved):
 1. Employee-level `finance_record` (filtered by `employee_id`)
-2. Department-level `finance_record` (via employee's `dept_id`) if employee records are empty
-3. General recent `finance_record` rows as last resort
+2. Department-level `finance_record` (context only, if employee records empty)
+3. **Does NOT cascade to general records** — prevents irrelevant employee data from polluting analysis
+
+General path (no employee target): fetches recent 20 company-wide finance records
+
+### Legal Agent Data Retrieval (`legal_agent.py`)
+
+1. Always fetches `legal_policy` rows (filtered by `query_category` if available)
+2. Resolves employee_id via `_resolve_employee_id` pattern
+3. If employee resolved: also fetches `legal_contract` + `legal_cases` for that employee
 
 ### Intent Detector (`backend/agents/intent_detector.py`)
 
@@ -220,7 +236,7 @@ Three-level cascade:
 | `AgentSelector.tsx` | `components/chat/` | Gemini-style toggle pill chips for each agent |
 | `AgentAvatar.tsx` | `components/chat/` | Custom SVG cartoon characters per department; exports `AGENT_COLORS` |
 | `AgentCard.tsx` | `components/chat/` | Cartoon-styled insight card with gradient header; `AgentCardSkeleton` for in-progress |
-| `DecisionResponse.tsx` | `components/chat/` | Streaming mode (live build-up) + static mode (history replay); typewriter on verdict |
+| `DecisionResponse.tsx` | `components/chat/` | Streaming + static mode; shared `PerspectivesPanel` + `FinalDecisionPanel` sub-components; typewriter on verdict |
 | `EmptyState.tsx` | `components/chat/` | Welcome screen showing 6 cartoon agents + sample queries |
 | `api.ts` | `lib/` | `analyzeDecisionStream()` (SSE) + `analyzeDecision()` (standard fetch) |
 
@@ -250,6 +266,21 @@ Each agent has a distinct custom SVG character:
 | Supply Chain | Hard hat, box/package | `orange-400 → red-600` |
 
 `AGENT_COLORS` exported from `AgentAvatar.tsx` provides per-agent `gradient`, `ring`, `text`, `light` Tailwind classes used across `AgentCard`, `AgentSelector`, `DecisionResponse`, and `EmptyState`.
+
+### Synthesis Panel Design (`DecisionResponse.tsx`)
+
+Two shared sub-components used by both streaming and static modes:
+
+**`PerspectivesPanel`** — simple two-column section after agents complete:
+- Header: `"What to do next?"` (plain text, small)
+- **Play it safe** (blue, `TrendingDown` icon) — low-risk option; was "Conservative"
+- **Move fast** (orange, `Zap` icon) — high-growth option; was "Aggressive"
+
+**`FinalDecisionPanel`** — lightweight summary card (light gray, no dark gradient):
+- `"Recommended action"` label + inline risk badge on the same row
+- Bold verdict text (typewriter in streaming mode)
+- Short reasoning paragraph
+- Thin emerald confidence bar + percentage label
 
 ### Frontend API Contract
 

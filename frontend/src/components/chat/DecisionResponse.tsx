@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { Shield, Flame, CheckCircle2 } from "lucide-react";
+import { CheckCircle2, TrendingDown, Zap } from "lucide-react";
 import type { AnalysisResponse, StreamingState } from "@/lib/api";
 import { AgentCard, AgentCardSkeleton } from "./AgentCard";
 import { AgentAvatar, AGENT_COLORS } from "./AgentAvatar";
@@ -69,6 +69,74 @@ const ThinkingBar = ({ status, agents_invoked, active_agents }: {
   </div>
 );
 
+// --- Shared synthesis components ---
+
+interface PerspectiveView { recommendation: string; reasoning: string; }
+
+const PerspectivesPanel = ({
+  conservative,
+  aggressive,
+}: {
+  conservative: PerspectiveView;
+  aggressive: PerspectiveView;
+}) => (
+  <div className="space-y-2 animate-fade-in-up">
+    <p className="text-sm font-semibold text-gray-700">What to do next?</p>
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <TrendingDown className="w-3.5 h-3.5 text-blue-500" />
+          <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">Play it safe</span>
+        </div>
+        <p className="text-xs font-semibold text-gray-800 mb-1">{conservative.recommendation}</p>
+        <p className="text-xs text-gray-500 leading-relaxed">{conservative.reasoning}</p>
+      </div>
+      <div className="rounded-xl border border-orange-200 bg-orange-50 p-3">
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <Zap className="w-3.5 h-3.5 text-orange-500" />
+          <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Move fast</span>
+        </div>
+        <p className="text-xs font-semibold text-gray-800 mb-1">{aggressive.recommendation}</p>
+        <p className="text-xs text-gray-500 leading-relaxed">{aggressive.reasoning}</p>
+      </div>
+    </div>
+  </div>
+);
+
+const FinalDecisionPanel = ({
+  verdict,
+  reasoning,
+  risk_level,
+  confidence_score,
+}: {
+  verdict: string;
+  reasoning: string;
+  risk_level: string;
+  confidence_score: number;
+  agentCount?: number;
+}) => (
+  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 animate-fade-in-up">
+    <div className="flex items-center gap-2 mb-2">
+      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+      <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">Recommended action</span>
+      <span className={`ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full ${riskBadge(risk_level)}`}>
+        {risk_level} risk
+      </span>
+    </div>
+    <p className="text-sm font-bold text-gray-900 mb-1.5 leading-snug">{verdict}</p>
+    <p className="text-xs text-gray-600 leading-relaxed">{reasoning}</p>
+    <div className="mt-3 flex items-center gap-2">
+      <div className="flex-1 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-emerald-400 transition-all duration-700"
+          style={{ width: `${confidence_score}%` }}
+        />
+      </div>
+      <span className="text-[10px] text-gray-400 font-medium shrink-0">{confidence_score}% confidence</span>
+    </div>
+  </div>
+);
+
 // --- Streaming mode component ---
 interface StreamingResponseProps {
   state: StreamingState;
@@ -109,68 +177,21 @@ const StreamingDecisionView = ({ state }: StreamingResponseProps) => {
 
       {/* Perspectives */}
       {state.conservative_view && state.aggressive_view && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 animate-fade-in-up">
-          <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4 backdrop-blur-sm">
-            <div className="flex items-center gap-2 mb-2">
-              <Shield className="w-4 h-4 text-blue-600" />
-              <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">Conservative</span>
-            </div>
-            <p className="text-sm font-semibold text-gray-800 mb-1.5">
-              {state.conservative_view.recommendation}
-            </p>
-            <p className="text-xs text-gray-600 leading-relaxed">
-              {state.conservative_view.reasoning}
-            </p>
-          </div>
-          <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4 backdrop-blur-sm">
-            <div className="flex items-center gap-2 mb-2">
-              <Flame className="w-4 h-4 text-orange-600" />
-              <span className="text-xs font-bold text-orange-700 uppercase tracking-wider">Aggressive</span>
-            </div>
-            <p className="text-sm font-semibold text-gray-800 mb-1.5">
-              {state.aggressive_view.recommendation}
-            </p>
-            <p className="text-xs text-gray-600 leading-relaxed">
-              {state.aggressive_view.reasoning}
-            </p>
-          </div>
-        </div>
+        <PerspectivesPanel
+          conservative={state.conservative_view}
+          aggressive={state.aggressive_view}
+        />
       )}
 
       {/* Final decision */}
       {state.final_decision && (
-        <div className="rounded-2xl bg-gradient-to-br from-slate-800 via-blue-900 to-violet-900 p-5 text-white animate-fade-in-up shadow-xl">
-          <div className="flex items-center gap-2 mb-1 opacity-70">
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="text-xs font-bold uppercase tracking-widest">Final Decision</span>
-          </div>
-          <h3 className="text-lg font-black tracking-tight mb-2 leading-tight">
-            {verdict || state.final_decision.verdict}
-          </h3>
-          <p className="text-sm opacity-85 leading-relaxed mb-4">
-            {state.final_decision.reasoning}
-          </p>
-          <div className="flex items-center gap-5 pt-3 border-t border-white/20">
-            <div>
-              <p className="text-[10px] opacity-50 mb-1 uppercase tracking-wide">Risk Level</p>
-              <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${riskBadge(state.final_decision.risk_level)}`}>
-                {state.final_decision.risk_level}
-              </span>
-            </div>
-            <div className="flex-1">
-              <div className="flex justify-between mb-1">
-                <p className="text-[10px] opacity-50 uppercase tracking-wide">Confidence</p>
-                <span className="text-xs font-bold opacity-90">{state.final_decision.confidence_score}%</span>
-              </div>
-              <div className="h-2 rounded-full bg-white/15 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-blue-300 to-violet-300 transition-all duration-1000"
-                  style={{ width: `${state.final_decision.confidence_score}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
+        <FinalDecisionPanel
+          verdict={verdict || state.final_decision.verdict}
+          reasoning={state.final_decision.reasoning}
+          risk_level={state.final_decision.risk_level}
+          confidence_score={state.final_decision.confidence_score}
+          agentCount={state.agent_insights.length}
+        />
       )}
     </div>
   );
@@ -218,55 +239,20 @@ const StaticDecisionView = ({ data, stage }: StaticResponseProps) => {
       )}
 
       {showPerspectives && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 animate-fade-in-up">
-          <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Shield className="w-4 h-4 text-blue-600" />
-              <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">Conservative</span>
-            </div>
-            <p className="text-sm font-semibold text-gray-800 mb-1.5">{data.conservative_view.recommendation}</p>
-            <p className="text-xs text-gray-600 leading-relaxed">{data.conservative_view.reasoning}</p>
-          </div>
-          <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Flame className="w-4 h-4 text-orange-600" />
-              <span className="text-xs font-bold text-orange-700 uppercase tracking-wider">Aggressive</span>
-            </div>
-            <p className="text-sm font-semibold text-gray-800 mb-1.5">{data.aggressive_view.recommendation}</p>
-            <p className="text-xs text-gray-600 leading-relaxed">{data.aggressive_view.reasoning}</p>
-          </div>
-        </div>
+        <PerspectivesPanel
+          conservative={data.conservative_view}
+          aggressive={data.aggressive_view}
+        />
       )}
 
       {showDecision && (
-        <div className="rounded-2xl bg-gradient-to-br from-slate-800 via-blue-900 to-violet-900 p-5 text-white animate-fade-in-up shadow-xl">
-          <div className="flex items-center gap-2 mb-1 opacity-70">
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="text-xs font-bold uppercase tracking-widest">Final Decision</span>
-          </div>
-          <h3 className="text-lg font-black tracking-tight mb-2">{verdict || data.final_decision.verdict}</h3>
-          <p className="text-sm opacity-85 leading-relaxed mb-4">{data.final_decision.reasoning}</p>
-          <div className="flex items-center gap-5 pt-3 border-t border-white/20">
-            <div>
-              <p className="text-[10px] opacity-50 mb-1 uppercase tracking-wide">Risk Level</p>
-              <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${riskBadge(data.final_decision.risk_level)}`}>
-                {data.final_decision.risk_level}
-              </span>
-            </div>
-            <div className="flex-1">
-              <div className="flex justify-between mb-1">
-                <p className="text-[10px] opacity-50 uppercase tracking-wide">Confidence</p>
-                <span className="text-xs font-bold opacity-90">{data.final_decision.confidence_score}%</span>
-              </div>
-              <div className="h-2 rounded-full bg-white/15 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-blue-300 to-violet-300 transition-all duration-1000"
-                  style={{ width: `${data.final_decision.confidence_score}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
+        <FinalDecisionPanel
+          verdict={verdict || data.final_decision.verdict}
+          reasoning={data.final_decision.reasoning}
+          risk_level={data.final_decision.risk_level}
+          confidence_score={data.final_decision.confidence_score}
+          agentCount={data.agent_insights.length}
+        />
       )}
     </div>
   );

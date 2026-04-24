@@ -1,5 +1,6 @@
 """Legal Agent — policies, contracts, compliance, legal cases."""
 import json
+import re
 from typing import Dict, List, Any
 from .base_agent import BaseAgent, AgentInsight
 from .llm_client import llm_json
@@ -23,6 +24,23 @@ Context is Malaysian employment law.
 
 class LegalAgent(BaseAgent):
 
+    async def _resolve_employee_id(self, context: Dict[str, Any]) -> int | None:
+        """Resolve employee_id from context — direct ID first, name search as fallback."""
+        if context.get('target_type') == 'employee':
+            if context.get('target_id'):
+                return int(context['target_id'])
+            if context.get('target_name'):
+                raw = re.sub(r'employee\s*#?\d*\s*', '', str(context['target_name']),
+                             flags=re.IGNORECASE).strip()
+                if raw and not raw.isdigit():
+                    try:
+                        results = await self.db.search_employees_by_name(raw)
+                        if results:
+                            return results[0].get('employee_id')
+                    except Exception:
+                        pass
+        return None
+
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         evidence = []
 
@@ -44,8 +62,8 @@ class LegalAgent(BaseAgent):
         ])
 
         # Employee-specific: contracts and legal cases
-        if context.get('target_type') == 'employee' and context.get('target_id'):
-            emp_id = context['target_id']
+        emp_id = await self._resolve_employee_id(context)
+        if emp_id:
             try:
                 contracts = await self.db.get_legal_contracts(employee_id=emp_id)
                 evidence.extend([
