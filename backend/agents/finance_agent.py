@@ -25,6 +25,7 @@ Analyze the financial records provided and return ONLY valid JSON:
   "trend": "up or down or flat"
 }
 Focus: cost of action vs inaction, budget headroom, ROI, financial risk. Currency: Malaysian Ringgit (RM).
+Rows with null employee_id are often platform/vendor; prioritize rows with employee_id for pay/salary context.
 """
 
 
@@ -106,20 +107,47 @@ class FinanceAgent(BaseAgent):
                             )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Finance dept context: %s", exc)
+            if not any(e.get("source") == "finance_record" for e in evidence):
+                try:
+                    records = await dbx.get_finance_records_employee_linked(limit=80)
+                    ftype = "payroll_context_finance"
+                    if not records:
+                        records = await dbx.get_finance_records(limit=50)
+                        ftype = "general_finance"
+                    if records:
+                        cap = 40 if ftype == "payroll_context_finance" else 30
+                        evidence.extend(
+                            [
+                                {
+                                    "source": "finance_record",
+                                    "type": ftype,
+                                    "record_id": r.get("finance_id"),
+                                    "data": r,
+                                }
+                                for r in records[:cap]
+                            ]
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Finance fallback (no per-target rows): %s", exc)
             return evidence
 
         try:
-            records = await dbx.get_finance_records(limit=20)
+            records = await dbx.get_finance_records_employee_linked(limit=80)
+            ftype = "payroll_context_finance"
+            if not records:
+                records = await dbx.get_finance_records(limit=50)
+                ftype = "general_finance"
             if records:
+                cap = 40 if ftype == "payroll_context_finance" else 30
                 evidence.extend(
                     [
                         {
                             "source": "finance_record",
-                            "type": "general_finance",
+                            "type": ftype,
                             "record_id": r.get("finance_id"),
                             "data": r,
                         }
-                        for r in records[:20]
+                        for r in records[:cap]
                     ]
                 )
         except Exception as exc:  # noqa: BLE001
@@ -160,8 +188,12 @@ class FinanceAgent(BaseAgent):
         context_note = ""
         if source_type == "department_finance":
             context_note = "\n(Department-level; employee-level rows missing.)"
+        elif source_type == "payroll_context_finance":
+            context_note = "\n(Rows with employee_id set — payroll / per-person cost context.)"
         elif source_type == "general_finance":
-            context_note = "\n(General company finance sample.)"
+            context_note = (
+                "\n(General finance sample; null employee_id may be platform e-commerce, not salary baselines.)"
+            )
         user_msg = f"Query: {query}{context_note}\n\nFinancial Records:\n{data_str}"
         extra = [e for e in evidence if e.get("source") == "uploaded_document"]
         if extra:

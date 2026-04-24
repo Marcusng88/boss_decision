@@ -7,6 +7,7 @@ Ilmu/Zhipu without changing the manager or document pipeline.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from functools import lru_cache
 from typing import Any, Dict
@@ -14,6 +15,8 @@ from typing import Any, Dict
 from openai import AsyncOpenAI
 
 from config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache()
@@ -47,6 +50,13 @@ def _extract_json(text: str) -> Dict[str, Any]:
 async def llm_json(system: str, user: str, temperature: float = 0.2) -> Dict[str, Any]:
     client = get_zhipu_client()
     model = get_zhipu_model()
+    logger.info(
+        "[Zhipu] chat.completions model=%r user_chars=%d system_chars=%d temp=%s",
+        model,
+        len(user or ""),
+        len(system or ""),
+        temperature,
+    )
     response = await client.chat.completions.create(
         model=model,
         messages=[

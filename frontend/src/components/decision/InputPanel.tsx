@@ -35,8 +35,9 @@ const AVAILABLE_AGENTS = [
 export const InputPanel = ({ onAnalyze, isAnalyzing }: InputPanelProps) => {
   const [query, setQuery] = useState("Should we fire employee #1023?");
   const [context, setContext] = useState("");
-  const [targetType, setTargetType] = useState("employee");
-  const [targetId, setTargetId] = useState("102");
+  /** Empty = no target (org-wide). Avoid defaulting to a non-existent id. */
+  const [targetType, setTargetType] = useState("");
+  const [targetId, setTargetId] = useState("");
   const [allowMockFallback, setAllowMockFallback] = useState(true);
   const [selectedFile, setSelectedFile] = useState<File | undefined>(undefined);
   
@@ -180,14 +181,14 @@ export const InputPanel = ({ onAnalyze, isAnalyzing }: InputPanelProps) => {
           <input
             value={targetType}
             onChange={(e) => setTargetType(e.target.value)}
-            placeholder="target_type"
+            placeholder="target_type (e.g. employee, or empty)"
             className="h-10 rounded-lg border border-border bg-background px-3 text-sm focus:ring-1 focus:ring-primary outline-none"
             disabled={isAnalyzing}
           />
           <input
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
-            placeholder="target_id"
+            placeholder="target_id (or empty for org-wide)"
             className="h-10 rounded-lg border border-border bg-background px-3 text-sm focus:ring-1 focus:ring-primary outline-none"
             disabled={isAnalyzing}
           />

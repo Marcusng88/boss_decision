@@ -27,6 +27,8 @@ Analyze the employee profile and HR records provided and return ONLY valid JSON 
   "trend": "up or down or flat"
 }
 Cover: employee name/role/department/tenure, performance scores, attendance, warnings, PIP status.
+If multiple employees appear (workforce), compare using performance_score and employee_id; for "best"
+or "top" employee questions, name the employee explicitly.
 """
 
 
@@ -36,6 +38,35 @@ class HRAgent(BaseAgent):
         self._company_db = company_db
         if company_db is not None:
             logger.info("HRAgent: Supabase + Zhipu analysis path enabled")
+
+    async def _append_workforce_snapshot(
+        self, dbx: Any, evidence: List[Dict[str, Any]]
+    ) -> None:
+        roster = await dbx.fetch_employees_limited(100)
+        if roster:
+            evidence.append(
+                {
+                    "source": "employee_roster",
+                    "type": "company_roster",
+                    "data": roster,
+                }
+            )
+        hr_sample = await dbx.fetch_hr_records_company_sample(limit=150)
+        evidence.extend(
+            [
+                {
+                    "source": "hr_record",
+                    "type": "workforce_review",
+                    "record_id": r.get("hr_id"),
+                    "data": r,
+                }
+                for r in hr_sample
+            ]
+        )
+
+    @staticmethod
+    def _evidence_has_employee_or_hr(evidence: List[Dict[str, Any]]) -> bool:
+        return any(e.get("source") in ("employee", "hr_record") for e in evidence)
 
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         evidence: List[Dict[str, Any]] = []
@@ -72,14 +103,18 @@ class HRAgent(BaseAgent):
                         pass
 
             if employee_id is None:
+                try:
+                    await self._append_workforce_snapshot(dbx, evidence)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("HR workforce snapshot failed: %s", exc)
                 return evidence
 
             try:
                 employee = await dbx.get_employee(employee_id)
                 if employee:
                     evidence.append({"source": "employee", "type": "profile", "data": employee})
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("HR get_employee(%s) failed: %s", employee_id, exc)
 
             hr_records = await dbx.get_employee_hr_records(employee_id)
             evidence.extend(
@@ -93,6 +128,11 @@ class HRAgent(BaseAgent):
                     for r in hr_records
                 ]
             )
+            if not self._evidence_has_employee_or_hr(evidence):
+                try:
+                    await self._append_workforce_snapshot(dbx, evidence)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("HR workforce fallback (bad/missing target) failed: %s", exc)
             return evidence
 
         # Local knowledge (no Supabase)
@@ -241,6 +281,10 @@ class HRAgent(BaseAgent):
         employee_profile = next(
             (e["data"] for e in evidence if e.get("source") == "employee"), None
         )
+        roster = next(
+            (e.get("data") for e in evidence if e.get("source") == "employee_roster"),
+            None,
+        )
         if not hr_rows:
             if employee_profile:
                 name = (
@@ -277,11 +321,43 @@ class HRAgent(BaseAgent):
                     emoji="👤",
                     data_summary=f"{name}, {position}",
                 )
+            if roster and isinstance(roster, list):
+                roster_str = json.dumps(roster, default=str, indent=2)
+                user_msg = (
+                    f"Query: {query}\n\n"
+                    "Context: roster only — no hr_record rows in evidence.\n"
+                    f"Roster:\n{roster_str}"
+                )
+                try:
+                    result = await llm_json(SYSTEM_PROMPT, user_msg)
+                    return AgentInsight(
+                        agent_name="HR",
+                        findings=result.get("findings", []),
+                        risks=result.get("risks", []),
+                        recommendation=result.get("recommendation", "Add HR review data"),
+                        confidence=float(result.get("confidence", 0.35)),
+                        evidence_used=evidence,
+                        emoji="👤",
+                        data_summary=result.get("data_summary", "Roster only"),
+                        metric_value=result.get("metric_value", ""),
+                        trend=result.get("trend", "flat"),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("HR Zhipu (roster-only) failed: %s", exc)
+                return AgentInsight(
+                    agent_name="HR",
+                    findings=["Roster loaded but no hr_record rows to rank by score"],
+                    risks=["Backfill hr_record to compare employees"],
+                    recommendation="Seed performance data or clear an invalid target_id",
+                    confidence=0.25,
+                    evidence_used=evidence,
+                    emoji="👤",
+                )
             return AgentInsight(
                 agent_name="HR",
                 findings=["Employee not found or no HR records in database"],
                 risks=["Cannot assess performance without data"],
-                recommendation="Verify employee id and records",
+                recommendation="Verify employee id and records; seed employee and hr_record if empty",
                 confidence=0.0,
                 evidence_used=evidence,
             )
@@ -291,7 +367,21 @@ class HRAgent(BaseAgent):
         )
         data_str = json.dumps(hr_rows, default=str, indent=2)
         extra = [e for e in evidence if e.get("source") == "uploaded_document"]
-        user_msg = f"Query: {query}\n\nEmployee Profile:\n{profile_str}\n\nHR Records:\n{data_str}"
+        workforce_note = (
+            "\n(Workforce: compare by performance_score / employee_id; name the best if asked.)\n"
+            if not employee_profile
+            else ""
+        )
+        roster_str = ""
+        if roster and not employee_profile and isinstance(roster, list):
+            roster_str = (
+                "\n\nRoster (names for employee_id):\n"
+                + json.dumps(roster, default=str, indent=2)
+            )
+        user_msg = (
+            f"Query: {query}{workforce_note}\n\nEmployee Profile:\n{profile_str}\n\nHR Records:\n{data_str}"
+            f"{roster_str}"
+        )
         if extra:
             user_msg += f"\n\nUploaded context:\n{json.dumps(extra, default=str)}"
         try:

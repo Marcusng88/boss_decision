@@ -28,14 +28,20 @@ class DatabaseService:
     def __init__(self):
         self.client = get_supabase_client()
     
-    async def get_employee(self, employee_id: int):
-        """Get employee with related records."""
-        response = self.client.table('employee') \
-            .select('*, department:dept_id(*)') \
-            .eq('employee_id', employee_id) \
-            .single() \
-            .execute()
-        return response.data
+    async def get_employee(self, employee_id: int) -> Optional[Dict[str, Any]]:
+        """Get employee with related records, or None if no row (uses maybe_single to avoid 406 on 0 rows)."""
+
+        def _run():
+            return (
+                self.client.table("employee")
+                .select("*, department:dept_id(*)")
+                .eq("employee_id", employee_id)
+                .maybe_single()
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data
     
     async def get_employee_hr_records(self, employee_id: int):
         """Get HR performance records for an employee."""
@@ -411,6 +417,41 @@ class DatabaseService:
             if dept_id is not None:
                 q = q.eq("dept_id", dept_id)
             return q.order("created_at", desc=True).limit(cap).execute()
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def get_finance_records_employee_linked(
+        self, limit: int = 80
+    ) -> List[Dict[str, Any]]:
+        """Finance rows with non-null employee_id (e.g. payroll); excludes platform rows with null employee."""
+        cap = min(max(1, limit), 200)
+
+        def _run():
+            return (
+                self.client.table("finance_record")
+                .select("*")
+                .not_.is_("employee_id", "null")
+                .order("created_at", desc=True)
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_hr_records_company_sample(self, limit: int = 150) -> List[Dict[str, Any]]:
+        """Company-wide hr_record rows, ordered by performance (for 'best employee' / workforce queries)."""
+        cap = min(max(1, limit), 300)
+
+        def _run():
+            return (
+                self.client.table("hr_record")
+                .select("*")
+                .order("performance_score", desc=True)
+                .limit(cap)
+                .execute()
+            )
 
         res = await self._to_thread(_run)
         return res.data or []

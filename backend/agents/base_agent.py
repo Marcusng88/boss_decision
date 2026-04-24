@@ -4,9 +4,12 @@ All agents (HR, Sales, Legal, etc.) inherit from this class.
 """
 from __future__ import annotations
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+
+from . import agent_logging
 
 from pydantic import BaseModel, ConfigDict
 from dotenv import load_dotenv
@@ -15,7 +18,6 @@ from services.llm_client import UnifiedLLMClient
 
 # Ensure env vars are loaded for all agents
 load_dotenv()
-
 
 class AgentInsight(BaseModel):
     """Structured output from an agent."""
@@ -175,6 +177,33 @@ Return a single JSON object:
         Returns:
             AgentInsight
         """
+        log = logging.getLogger(self.__class__.__module__)
+        label = self.agent_name or self.__class__.__name__
+        log.info(
+            "[%s] run_start query_preview=%r context=%s",
+            label,
+            (query or "")[:200],
+            agent_logging.context_for_log(context),
+        )
         evidence = await self.retrieve_evidence(query, context)
+        ev = agent_logging.summarize_evidence(evidence)
+        log.info(
+            "[%s] evidence_retrieved total=%d by_source=%s types_by_source=%s",
+            label,
+            ev["total"],
+            ev["by_source"],
+            ev.get("types_by_source") or {},
+        )
         insight = await self.analyze(evidence, query)
+        first_f = (insight.findings[0] if insight.findings else "") or ""
+        log.info(
+            "[%s] analyze_done confidence=%.3f findings=%d risks=%d rec_preview=%r",
+            label,
+            float(insight.confidence),
+            len(insight.findings or []),
+            len(insight.risks or []),
+            (insight.recommendation or "")[:180],
+        )
+        if first_f:
+            log.info("[%s] first_finding: %r", label, first_f[:400])
         return insight
