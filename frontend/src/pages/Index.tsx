@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Brain, AlertTriangle } from "lucide-react";
+import { Brain, AlertTriangle, FileText } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { InputPanel } from "@/components/decision/InputPanel";
@@ -7,6 +9,7 @@ import { FinalDecision } from "@/components/decision/FinalDecision";
 import { analyzeDecision, AnalysisResult, ChatMessage } from "@/lib/decision-engine";
 
 const Index = () => {
+  const navigate = useNavigate();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [activeQuery, setActiveQuery] = useState<string>("");
@@ -101,9 +104,20 @@ const Index = () => {
               </p>
             </div>
           </div>
-          <div className="hidden md:flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-            Engine online
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/documents")}
+              className="bg-gradient-to-r from-orange-400 to-orange-600 text-white border-0 hover:from-orange-500 hover:to-orange-700 shadow-md"
+            >
+              <FileText className="w-4 h-4 mr-2" />
+              Documents
+            </Button>
+            <div className="hidden md:flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+              Engine online
+            </div>
           </div>
         </div>
       </header>
