@@ -4,6 +4,7 @@ from agents import (
     HRAgent,
     SalesAgent,
     LegalAgent,
+    FinanceAgent,
     MarketingAgent,
     SupplyChainAgent,
     ManagerAgent,
@@ -16,6 +17,7 @@ async def main():
         HRAgent(knowledge),
         SalesAgent(knowledge),
         LegalAgent(knowledge),
+        FinanceAgent(knowledge),
         MarketingAgent(knowledge),
         SupplyChainAgent(knowledge),
     ]

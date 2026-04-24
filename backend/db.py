@@ -373,3 +373,70 @@ class DatabaseService:
         except Exception as exc:  # noqa: BLE001
             logger.warning("fetch_supporting_by_scope failed scope=%s: %s", s, exc)
         return []
+
+    # ------------------------------------------------------------------
+    # HR / Legal / Finance agents (Zhipu path — full table reads)
+    # ------------------------------------------------------------------
+
+    async def search_employees_by_name(self, name: str, limit: int = 8) -> List[Dict[str, Any]]:
+        q = (name or "").strip()
+        if not q:
+            return []
+        cap = min(max(1, limit), 20)
+
+        def _run():
+            return (
+                self.client.table("employee")
+                .select("employee_id,name,email,dept_id,role,hire_date,exit_date")
+                .ilike("name", f"%{q}%")
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def get_finance_records(
+        self,
+        employee_id: Optional[int] = None,
+        dept_id: Optional[int] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        cap = min(max(1, limit), 200)
+
+        def _run():
+            q = self.client.table("finance_record").select("*")
+            if employee_id is not None:
+                q = q.eq("employee_id", employee_id)
+            if dept_id is not None:
+                q = q.eq("dept_id", dept_id)
+            return q.order("created_at", desc=True).limit(cap).execute()
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def get_legal_contracts(self, employee_id: int) -> List[Dict[str, Any]]:
+        def _run():
+            return (
+                self.client.table("legal_contract")
+                .select("*")
+                .eq("employee_id", employee_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def get_legal_cases(self, employee_id: int) -> List[Dict[str, Any]]:
+        def _run():
+            return (
+                self.client.table("legal_cases")
+                .select("*")
+                .eq("employee_id", employee_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []

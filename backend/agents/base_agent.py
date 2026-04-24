@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from dotenv import load_dotenv
 
 from services.llm_client import UnifiedLLMClient
@@ -19,12 +19,19 @@ load_dotenv()
 
 class AgentInsight(BaseModel):
     """Structured output from an agent."""
+    model_config = ConfigDict(extra="ignore")
+
     agent_name: str
     findings: List[str]
     risks: List[str]
     recommendation: str
     confidence: float  # 0.0 to 1.0
     evidence_used: List[Dict[str, Any]]  # List of record IDs and sources
+    # Optional: HR/Legal/Finance (Zhipu) helpers — ignored by other consumers
+    emoji: Optional[str] = None
+    data_summary: Optional[str] = None
+    metric_value: Optional[str] = None
+    trend: Optional[str] = None
 
 
 class BaseAgent(ABC):
