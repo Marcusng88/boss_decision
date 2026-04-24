@@ -11,6 +11,7 @@ import SupplyChainAgent from "./pages/SupplyChainAgent.tsx";
 import DeepSimulationLive from "./pages/DeepSimulationLive.tsx";
 import NetworkSimulationLive from "./pages/NetworkSimulationLive.tsx";
 import SalesSupplyDebateSimulator from "./pages/SalesSupplyDebateSimulator.tsx";
+import SimulatorsHub from "./pages/SimulatorsHub.tsx";
 
 const queryClient = new QueryClient();
 
@@ -22,6 +23,7 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Index />} />
+          <Route path="/simulators" element={<SimulatorsHub />} />
           <Route path="/simulation-live" element={<SimulationLive />} />
           <Route path="/agents/sales" element={<SalesAgent />} />
           <Route path="/agents/supply-chain" element={<SupplyChainAgent />} />

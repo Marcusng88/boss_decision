@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 from pathlib import Path
 from typing import Any
+from typing import Literal
 
+from deepagents import create_deep_agent
+from langchain.tools import tool
 from pydantic import BaseModel
 from pydantic import Field
 
@@ -98,8 +102,146 @@ class NetworkOrchestrator:
         self.rng = rng
         self.world_model = get_world_builder_model()
         self.node_model = get_node_turn_model()
+        self._node_agent_cache: dict[str, Any] = {}
+        self._context_roots = self._resolve_context_roots()
         self.personas: dict[str, str] = {}
         self.assumptions: list[str] = []
+
+    def _resolve_context_roots(self) -> list[Path]:
+        """Resolve absolute roots allowed for node-agent file reads."""
+        candidates: list[Path] = []
+        if self.request.data_context_path:
+            root = Path(self.request.data_context_path)
+            if not root.is_absolute():
+                root = Path(__file__).resolve().parents[2] / root
+            candidates.append(root.resolve())
+        else:
+            candidates.append((Path(__file__).resolve().parents[2] / "agent_docs" / "simulator").resolve())
+
+        roots: list[Path] = []
+        for item in candidates:
+            if item.exists() and item.is_dir():
+                roots.append(item)
+        return roots
+
+    def _extract_text_content(self, content: Any) -> str:
+        """Convert model/deep-agent chunk content payloads into plain text."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    chunks.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        chunks.append(text)
+            return "".join(chunks)
+        return str(content) if content is not None else ""
+
+    def _get_node_deep_agent(self, node: dict[str, Any]) -> Any | None:
+        """Create/cache a deep agent for one network node persona with bounded tools."""
+        if self.node_model is None:
+            return None
+        node_id = str(node.get("node_id", "")).strip()
+        if not node_id:
+            return None
+        cached = self._node_agent_cache.get(node_id)
+        if cached is not None:
+            return cached
+
+        persona_prompt = self.personas.get(node_id, "Act according to your role and current network pressures.")
+        system_prompt = (
+            "You are a node actor in a business-economic network simulation.\n"
+            "Always reason in business plain language and keep outputs concise.\n"
+            "Use tools when necessary for evidence.\n"
+            "Write sections: Situation, Evidence, Action, Why, Watch next.\n\n"
+            f"Persona guidance: {persona_prompt}"
+        )
+        allowed_roots = self._context_roots[:]
+
+        @tool("read_allowed_file")
+        def read_allowed_file(path: str, max_chars: int = 2400) -> str:
+            """Read files from allowlisted simulation context roots only."""
+            target = Path(path).resolve()
+            if not any(str(target).startswith(str(root)) for root in allowed_roots):
+                return f"Denied: path `{target}` is outside allowed roots."
+            if not target.exists() or not target.is_file():
+                return f"File not found: `{target}`."
+            try:
+                text = target.read_text(encoding="utf-8", errors="ignore")
+                return text[: max(200, min(max_chars, 12000))]
+            except Exception as exc:
+                return f"Read failed: {exc}"
+
+        @tool("internet_search")
+        def internet_search(query: str, max_results: int = 3, topic: Literal["general", "news", "finance"] = "general") -> str:
+            """Search web context using Tavily if enabled for this scenario."""
+            if not self.request.allow_internet:
+                return "Internet search disabled for this run."
+            api_key = os.getenv("TAVILY_API_KEY", "").strip()
+            if not api_key:
+                return "TAVILY_API_KEY missing."
+            try:
+                from tavily import TavilyClient
+
+                client = TavilyClient(api_key=api_key)
+                result = client.search(query=query, max_results=max(1, min(max_results, 6)), topic=topic)
+                rows: list[str] = []
+                for item in result.get("results", [])[:6]:
+                    title = str(item.get("title", "")).strip()
+                    url = str(item.get("url", "")).strip()
+                    snippet = str(item.get("content", "")).replace("\n", " ").strip()
+                    rows.append(f"- {title} ({url}): {snippet[:180]}")
+                return "\n".join(rows) if rows else "No search results."
+            except Exception as exc:
+                return f"Search failed: {exc}"
+
+        tools: list[Any] = [read_allowed_file]
+        if self.request.allow_internet:
+            tools.append(internet_search)
+        try:
+            agent = create_deep_agent(model=self.node_model, system_prompt=system_prompt, tools=tools)
+            self._node_agent_cache[node_id] = agent
+            return agent
+        except Exception:
+            return None
+
+    async def _collect_node_deep_agent_text(self, agent: Any, prompt: str) -> str:
+        """Collect final textual transcript from deep-agent stream."""
+        collected = ""
+        latest_values: dict[str, Any] | None = None
+        async for part in agent.astream(
+            {"messages": [{"role": "user", "content": prompt}]},
+            stream_mode=["messages", "values"],
+            version="v2",
+        ):
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "messages":
+                data = part.get("data")
+                if not isinstance(data, (tuple, list)) or not data:
+                    continue
+                message_chunk = data[0]
+                text = self._extract_text_content(getattr(message_chunk, "content", ""))
+                if text:
+                    collected += text
+            elif part.get("type") == "values":
+                values = part.get("data")
+                if isinstance(values, dict):
+                    latest_values = values
+
+        if not collected and latest_values:
+            messages = latest_values.get("messages")
+            if isinstance(messages, list):
+                for item in reversed(messages):
+                    content = getattr(item, "content", item.get("content") if isinstance(item, dict) else "")
+                    extracted = self._extract_text_content(content)
+                    if extracted.strip():
+                        collected = extracted
+                        break
+        return collected
 
     def build_world(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Build initial nodes/edges from LLM output, with deterministic fallback."""
@@ -119,7 +261,7 @@ class NetworkOrchestrator:
         ordered = node_ids[start:] + node_ids[:start]
         return ordered[:window]
 
-    def build_node_turn(
+    async def build_node_turn(
         self,
         tick: int,
         node: dict[str, Any],
@@ -129,7 +271,7 @@ class NetworkOrchestrator:
         recent_events: list[dict[str, Any]],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Generate one node action and companion narrative from LLM or fallback."""
-        action_output = self._build_node_turn_with_llm(
+        action_output = await self._build_node_turn_with_llm(
             tick=tick,
             node=node,
             nodes=nodes,
@@ -210,7 +352,7 @@ class NetworkOrchestrator:
             return None
         return nodes, edges
 
-    def _build_node_turn_with_llm(
+    async def _build_node_turn_with_llm(
         self,
         tick: int,
         node: dict[str, Any],
@@ -219,7 +361,7 @@ class NetworkOrchestrator:
         kpis: dict[str, float],
         recent_events: list[dict[str, Any]],
     ) -> NodeTurnOutput | None:
-        """Ask node-turn LLM for a typed action and explanatory narrative."""
+        """Ask a deep-agent node actor for analysis, then normalize into typed output."""
         if self.node_model is None:
             return None
 
@@ -228,31 +370,62 @@ class NetworkOrchestrator:
         nearby_edges = [
             edge for edge in edges if edge.get("source") == node_id or edge.get("target") == node_id
         ][:8]
-        prompt = (
-            "You control one node inside a live economic network simulation.\n"
-            f"Scenario query: {self.request.query}\n"
-            f"Tick: {tick}/{self.request.max_ticks}\n"
-            f"Your node: {json.dumps(node, ensure_ascii=True)}\n"
-            f"Persona: {persona}\n"
-            f"Current KPI deltas: {json.dumps(kpis, ensure_ascii=True)}\n"
-            f"Connected edges: {json.dumps(nearby_edges, ensure_ascii=True)}\n"
-            f"Recent events: {json.dumps(recent_events[-12:], ensure_ascii=True)}\n"
-            "Output constraints:\n"
+        deep_agent = self._get_node_deep_agent(node=node)
+        transcript = ""
+        if deep_agent is not None:
+            prompt = (
+                "You control one node inside a live economic network simulation.\n"
+                f"Scenario query: {self.request.query}\n"
+                f"Tick: {tick}/{self.request.max_ticks}\n"
+                f"Your node: {json.dumps(node, ensure_ascii=True)}\n"
+                f"Persona: {persona}\n"
+                f"Current KPI deltas: {json.dumps(kpis, ensure_ascii=True)}\n"
+                f"Connected edges: {json.dumps(nearby_edges, ensure_ascii=True)}\n"
+                f"Recent events: {json.dumps(recent_events[-12:], ensure_ascii=True)}\n"
+                "Use `read_allowed_file` for internal context when useful.\n"
+                "Use `internet_search` only if needed and enabled.\n"
+                "End with one explicit recommended move in plain language."
+            )
+            try:
+                transcript = await self._collect_node_deep_agent_text(deep_agent, prompt)
+            except Exception:
+                transcript = ""
+
+        structured_prompt = (
+            "Convert the following node analysis into one strict JSON object.\n"
+            "Do not output markdown or prose.\n"
+            f"JSON schema: {json.dumps(NodeTurnOutput.model_json_schema(), ensure_ascii=True, separators=(',', ':'))}\n"
+            "Constraints:\n"
             "- action.action_type must be one of observe, message, price_adjust, budget_shift, negotiate_supply, "
             "community_campaign, risk_mitigation, wait\n"
             "- action.payload should be compact and numeric where possible\n"
             "- action.confidence must be in [0,1]\n"
             "- action.message should be 1 short sentence from this node's perspective\n"
-            "- narrative should be understandable by non-technical users\n"
             "- narrative confidence_band must be one of low, medium, high\n"
-            "- impact directions must be one of up, down, stable\n"
-            "- full_response_md must be valid markdown and include: what happened, why, and what to watch next\n"
-            "Writing style:\n"
-            "- first-person persona voice for storytelling\n"
-            "- business plain language for consequences (sales, cost, risk)\n"
-            "- avoid technical API/schema terms\n"
+            "- impact directions must be one of up, down, stable\n\n"
+            f"Scenario query: {self.request.query}\n"
+            f"Tick: {tick}/{self.request.max_ticks}\n"
+            f"Node: {json.dumps(node, ensure_ascii=True)}\n"
+            f"KPI deltas: {json.dumps(kpis, ensure_ascii=True)}\n"
+            f"Recent events: {json.dumps(recent_events[-12:], ensure_ascii=True)}\n"
+            f"Node analysis transcript: {json.dumps(transcript, ensure_ascii=True)}"
         )
-        return self._invoke_validated_json(self.node_model, prompt, NodeTurnOutput)
+
+        parsed = self._invoke_validated_json(self.node_model, structured_prompt, NodeTurnOutput)
+        if parsed is not None:
+            return parsed
+
+        if transcript.strip():
+            fallback_prompt = (
+                "You control one node inside a live economic network simulation.\n"
+                "Write a compact action + narrative output as strict JSON only.\n"
+                f"JSON schema: {json.dumps(NodeTurnOutput.model_json_schema(), ensure_ascii=True, separators=(',', ':'))}\n"
+                f"Node: {json.dumps(node, ensure_ascii=True)}\n"
+                f"KPI deltas: {json.dumps(kpis, ensure_ascii=True)}\n"
+                f"Transcript: {json.dumps(transcript, ensure_ascii=True)}"
+            )
+            return self._invoke_validated_json(self.node_model, fallback_prompt, NodeTurnOutput)
+        return None
 
     def _fallback_world(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Generate deterministic non-LLM world so runtime remains functional without model access."""
@@ -502,25 +675,21 @@ class NetworkOrchestrator:
 
     def _read_context_snippets(self, max_chars: int = 4000) -> str:
         """Read compact local context from the configured folder for world-builder grounding."""
-        if self.request.data_context_path:
-            root = Path(self.request.data_context_path)
-            if not root.is_absolute():
-                root = Path(__file__).resolve().parents[2] / root
-        else:
-            root = Path(__file__).resolve().parents[2] / "agent_docs" / "simulator"
-
-        if not root.exists() or not root.is_dir():
+        if not self._context_roots:
             return ""
 
         snippets: list[str] = []
         remaining = max_chars
-        files = sorted(
-            [
-                p
-                for p in root.rglob("*")
-                if p.is_file() and p.suffix.lower() in {".md", ".txt", ".json", ".csv"}
-            ]
-        )[:20]
+        files: list[Path] = []
+        for root in self._context_roots:
+            files.extend(
+                [
+                    p
+                    for p in root.rglob("*")
+                    if p.is_file() and p.suffix.lower() in {".md", ".txt", ".json", ".csv"}
+                ]
+            )
+        files = sorted(files)[:20]
         for path in files:
             if remaining <= 0:
                 break

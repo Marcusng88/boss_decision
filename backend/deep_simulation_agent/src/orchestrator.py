@@ -35,6 +35,14 @@ Markdown behavior contract:
 def _load_env() -> None:
     backend_root = Path(__file__).resolve().parents[2]
     load_dotenv(backend_root / ".env", override=False)
+
+    zhipu_key = os.getenv("ZHIPU_API_KEY")
+    zhipu_base_url = os.getenv("ZHIPU_BASE_URL")
+    if zhipu_key and not os.getenv("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = zhipu_key
+    if zhipu_base_url and not os.getenv("OPENAI_BASE_URL"):
+        os.environ["OPENAI_BASE_URL"] = zhipu_base_url
+
     google_key = os.getenv("GOOGLE_API_KEY")
     if google_key and not os.getenv("GEMINI_API_KEY"):
         os.environ["GEMINI_API_KEY"] = google_key
@@ -52,7 +60,8 @@ def _infer_model_name() -> str:
         return str(os.getenv("SIMULATOR_MODEL"))
     if os.getenv("ZHIPU_API_KEY"):
         zhipu_model = os.getenv("ZHIPU_MODEL", "ilmu-glm-5.1")
-        return zhipu_model if ":" in zhipu_model else f"openai:{zhipu_model}"
+        name = os.getenv("ZHIPU_MODEL") or os.getenv("LLM_MODEL") or zhipu_model
+        return name if ":" in name else f"openai:{name}"
     if os.getenv("OPENAI_API_KEY"):
         name = os.getenv("LLM_MODEL", "ilmu-glm-5.1")
         return name if ":" in name else f"openai:{name}"
@@ -139,7 +148,15 @@ class DeepOrchestrator:
         try:
             from langchain.chat_models import init_chat_model
 
-            return init_chat_model(model=model_name, temperature=temperature)
+            kwargs: dict[str, Any] = {"temperature": temperature}
+            if model_name.startswith("openai:") or ":" not in model_name:
+                openai_key = os.getenv("OPENAI_API_KEY")
+                openai_base = os.getenv("OPENAI_BASE_URL")
+                if openai_key:
+                    kwargs["api_key"] = openai_key
+                if openai_base:
+                    kwargs["base_url"] = openai_base
+            return init_chat_model(model=model_name, **kwargs)
         except Exception as exc:
             logger.warning("deep.orchestrator.model_init_failed model=%s error=%s", model_name, exc)
             return None
@@ -409,7 +426,6 @@ class DeepOrchestrator:
                     text = _extract_text_content(getattr(message_chunk, "content", ""))
                     if text:
                         collected += text
-                        yield {"type": "agent_chunk", "persona_id": persona.id, "chunk": text}
                     for tool_chunk in _extract_tool_call_chunks(message_chunk):
                         tool_name = str(tool_chunk.get("name") or tool_chunk.get("tool_name") or "").strip()
                         tool_id = str(tool_chunk.get("id") or "").strip()

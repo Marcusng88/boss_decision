@@ -22,6 +22,13 @@ def _load_env_for_simulator() -> None:
     load_dotenv(root_backend / ".env", override=False)
     load_dotenv(simulator_root / ".env", override=False)
 
+    zhipu_key = os.getenv("ZHIPU_API_KEY")
+    zhipu_base_url = os.getenv("ZHIPU_BASE_URL")
+    if zhipu_key and not os.getenv("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = zhipu_key
+    if zhipu_base_url and not os.getenv("OPENAI_BASE_URL"):
+        os.environ["OPENAI_BASE_URL"] = zhipu_base_url
+
     # Normalize Gemini key aliasing for provider SDK compatibility.
     google_key = os.getenv("GOOGLE_API_KEY")
     if google_key and not os.getenv("GEMINI_API_KEY"):
@@ -47,6 +54,9 @@ def _infer_provider_default_model() -> str:
         return zhipu_model if ":" in zhipu_model else f"openai:{zhipu_model}"
 
     # Keep defaults aligned with whichever provider key is configured.
+    if os.getenv("ZHIPU_API_KEY"):
+        zhipu_model = os.getenv("ZHIPU_MODEL") or os.getenv("LLM_MODEL") or "ilmu-glm-5.1"
+        return zhipu_model if ":" in zhipu_model else f"openai:{zhipu_model}"
     if os.getenv("OPENAI_API_KEY"):
         llm_model = os.getenv("LLM_MODEL", "ilmu-glm-5.1")
         return llm_model if ":" in llm_model else f"openai:{llm_model}"
@@ -70,11 +80,32 @@ def _get_model(model_name: str) -> Any:
     try:
         from langchain.chat_models import init_chat_model
 
-        _MODEL_CACHE[model_name] = init_chat_model(model=model_name)
+        kwargs: dict[str, Any] = {}
+        if model_name.startswith("openai:") or ":" not in model_name:
+            openai_key = os.getenv("OPENAI_API_KEY")
+            openai_base = os.getenv("OPENAI_BASE_URL")
+            if openai_key:
+                kwargs["api_key"] = openai_key
+            if openai_base:
+                kwargs["base_url"] = openai_base
+        _MODEL_CACHE[model_name] = init_chat_model(model=model_name, **kwargs)
     except Exception as exc:
         logger.warning("Simulator model init failed for '%s': %s", model_name, exc)
         _MODEL_CACHE[model_name] = None
     return _MODEL_CACHE[model_name]
+
+
+def get_openai_compat_kwargs() -> dict[str, str]:
+    """Return OpenAI-compatible connection overrides for custom gateways."""
+    _load_env_for_simulator()
+    kwargs: dict[str, str] = {}
+    openai_key = os.getenv("OPENAI_API_KEY")
+    openai_base = os.getenv("OPENAI_BASE_URL")
+    if openai_key:
+        kwargs["api_key"] = openai_key
+    if openai_base:
+        kwargs["base_url"] = openai_base
+    return kwargs
 
 
 def get_parser_model() -> Any:

@@ -81,8 +81,8 @@ const Index = () => {
                 Run fast, transparent multi-agent debates for high-stakes calls.
               </h2>
               <p className="mt-3 text-sm text-muted-foreground md:text-base">
-                Start with a leadership prompt, inspect each specialist perspective, then stream the simulator
-                in a dedicated arena below.
+                Start with a leadership prompt, inspect each specialist perspective, then open all three simulators
+                in one continuous page.
               </p>
             </div>
             <div className="grid w-full max-w-sm grid-cols-2 gap-3 text-sm md:text-base">
@@ -90,12 +90,12 @@ const Index = () => {
                 <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Pipelines</p>
                 <p className="mt-1 flex items-center gap-2 font-semibold text-foreground">
                   <Radar className="h-4 w-4 text-primary" />
-                  Decision + Simulator
+                  Decision + 3 Simulators
                 </p>
               </div>
               <div className="rounded-2xl border border-border bg-background/70 p-3">
                 <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Mode</p>
-                <p className="mt-1 font-semibold text-foreground">Live Streaming</p>
+                <p className="mt-1 font-semibold text-foreground">Unified Live Page</p>
               </div>
             </div>
           </div>

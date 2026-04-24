@@ -301,6 +301,7 @@ export function NetworkSimulationSection() {
   const streamAbortRef = useRef<AbortController | null>(null);
   const followLiveRef = useRef(true);
   const currentDayRef = useRef(0);
+  const graphViewportRef = useRef<HTMLDivElement | null>(null);
   const nodesRef = useRef<NetworkNode[]>(nodes);
   const narrativesByDayRef = useRef<Record<number, Record<string, NodeNarrative>>>({});
   const dragCanvasRef = useRef<{ active: boolean; startX: number; startY: number }>({
@@ -349,6 +350,21 @@ export function NetworkSimulationSection() {
   useEffect(() => {
     narrativesByDayRef.current = narrativesByDay;
   }, [narrativesByDay]);
+
+  useEffect(() => {
+    if (!dialogNode) return;
+    if (dragCanvasRef.current.active || dragNodeRef.current) return;
+    const viewport = graphViewportRef.current;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    const anchorX = rect.width * 0.43;
+    const anchorY = rect.height * 0.5;
+    setOffset({
+      x: anchorX - dialogNode.x * zoom,
+      y: anchorY - dialogNode.y * zoom,
+    });
+    setSelectedNodeId(dialogNode.id);
+  }, [dialogNode, zoom]);
 
   useEffect(() => {
     if (!isReplayPlaying) return;
@@ -472,6 +488,7 @@ export function NetworkSimulationSection() {
           },
         }));
         setActiveDialogNodeId(nodeId);
+        setSelectedNodeId(nodeId);
         setNodes((prev) =>
           prev.map((node) =>
             node.id === nodeId
@@ -705,7 +722,7 @@ export function NetworkSimulationSection() {
         </div>
 
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
-          <Button className="h-10" onClick={() => startSimulation()}>
+          <Button className="h-10" onClick={() => startSimulation()} disabled={isRunning}>
             <Play className="mr-2 h-4 w-4" />
             Run Simulation
           </Button>
@@ -757,10 +774,6 @@ export function NetworkSimulationSection() {
             <p className='text-lg text-foreground [font-family:"Iowan_Old_Style",Georgia,serif]'>Economic Relationship Network</p>
           </div>
           <div className="flex items-center gap-2">
-            <Badge className="bg-primary/15 text-primary hover:bg-primary/15">
-              <Network className="mr-1 h-3 w-3" />
-              Interactive
-            </Badge>
             <Badge variant="outline">
               <Compass className="mr-1 h-3 w-3" />
               Zoom {zoom.toFixed(2)}x
@@ -837,6 +850,7 @@ export function NetworkSimulationSection() {
           </div>
         </div>
         <div
+          ref={graphViewportRef}
           className="relative h-[560px] overflow-hidden rounded-2xl border border-border/80 bg-[radial-gradient(circle_at_12%_18%,rgba(233,119,46,0.12),transparent_34%),radial-gradient(circle_at_84%_76%,rgba(60,131,123,0.15),transparent_38%),linear-gradient(180deg,rgba(250,246,239,0.95),rgba(241,235,224,0.94))]"
           onWheel={handleWheel}
           onPointerDown={handleCanvasPointerDown}

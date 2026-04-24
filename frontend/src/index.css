@@ -244,23 +244,23 @@ All colors MUST be HSL.
   }
 
   .board-token-thinking {
-    animation: sim-think 1.2s ease-in-out infinite;
+    animation: none;
   }
 
   .board-token-acting {
-    animation: sim-act 0.7s ease-in-out infinite;
+    animation: none;
   }
 
   .board-shake {
-    animation: board-shake 0.32s ease-in-out;
+    animation: none;
   }
 
   .board-edge-flow {
-    animation: board-edge-flow 1.6s linear infinite;
+    animation: none;
   }
 
   .tile-ping {
-    animation: tile-ping 0.9s ease-out forwards;
+    animation: none;
   }
 
   .chat-pop {

@@ -16,6 +16,16 @@ def progress_event(state: DeepSimulationState, summary: str) -> dict[str, Any]:
 
 
 def world_event(state: DeepSimulationState) -> dict[str, Any]:
+    agents = [
+        {
+            "id": agent.id,
+            "name": agent.name,
+            "role": agent.role,
+            "status": agent.status,
+            "confidence": agent.confidence,
+        }
+        for agent in state.agents
+    ]
     return {
         "type": "world",
         "tick": state.tick,
@@ -35,11 +45,11 @@ def world_event(state: DeepSimulationState) -> dict[str, Any]:
                 if state.latest_score_breakdown is not None
                 else None
             ),
-            "score_breakdown_history": [item.model_dump(mode="json") for item in state.score_breakdown_history[-40:]],
-            "agents": [agent.model_dump() for agent in state.agents],
-            "personas": [persona.model_dump() for persona in state.personas],
-            "timeline": [item.model_dump(mode="json") for item in state.timeline],
-            "map": state.map.model_dump(),
+            "agents": agents,
+            "personas": [persona.model_dump(mode="json") for persona in state.personas],
+            "map": {
+                "zones": [zone.model_dump(mode="json") for zone in state.map.zones],
+            },
         },
     }
 
