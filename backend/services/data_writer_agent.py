@@ -277,7 +277,7 @@ Most tables have an `ai_justification` TEXT column for storing:
 YOUR TASK:
 =================================================
 
-Given a document extraction JSON (from Gemini AI) AND optional user custom extraction request, you must:
+Given a document extraction JSON (from Zhipu GLM) AND optional user custom extraction request, you must:
 
 1. **Analyze the document type and department**
 2. **Map extracted entities to the correct table(s)**

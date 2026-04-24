@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 try:
-    # Preferred Gemini SDK
+    # Document vision / multimodal client (google-genai)
     from google import genai as google_genai
     HAS_NEW_GENAI = True
 except Exception:
@@ -84,7 +84,7 @@ def _validate_google_api_key(api_key: Optional[str]) -> None:
         or "your" in normalized.lower() and "key" in normalized.lower()
     ):
         raise ValueError(
-            "GOOGLE_API_KEY appears to be a placeholder. Set your real Gemini API key in backend/.env."
+            "GOOGLE_API_KEY appears to be a placeholder. Set a valid key in backend/.env."
         )
 
 ALLOWED_EXTENSIONS = {
@@ -114,7 +114,7 @@ class DocumentIngestor:
         self.settings = load_document_settings()
         _validate_google_api_key(self.settings.google_api_key)
         
-        # 2. Configure the Gemini SDK
+        # 2. Configure the document vision client
         self._sdk = None
         self.model = None
         self.client = None
@@ -141,7 +141,7 @@ class DocumentIngestor:
             self.model = legacy_genai.GenerativeModel(model_name=self.settings.llm_model)
         elif self._sdk is None:
             raise ImportError(
-                "No Gemini SDK available. Install 'google-genai' or 'google-generativeai'."
+                "No document vision client available. Install 'google-genai' or 'google-generativeai'."
             )
 
         self.extraction_prompt = """You are an enterprise document classification and information extraction system.
@@ -281,7 +281,7 @@ Now analyze the provided document and return ONLY valid JSON."""
             print(f"    [DOCUMENT_SERVICE]     File processing timeout, proceeding anyway...")
             return current
 
-        print(f"    [DOCUMENT_SERVICE]     Using legacy Gemini API...")
+        print(f"    [DOCUMENT_SERVICE]     Using legacy document vision API path...")
         file = legacy_genai.upload_file(file_path)
         wait_count = 0
         while file.state.name == "PROCESSING":
@@ -316,14 +316,14 @@ Now analyze the provided document and return ONLY valid JSON."""
                         "DOCX" if file_ext == ".docx" else \
                         "TEXT"
             
-            print(f"    [DOCUMENT_SERVICE] Processing as {file_type} using Google Gemini...")
-            print(f"    [DOCUMENT_SERVICE] Uploading file to Gemini API...")
+            print(f"    [DOCUMENT_SERVICE] Processing as {file_type} using Zhipu GLM...")
+            print(f"    [DOCUMENT_SERVICE] Uploading file to vision service...")
             
             uploaded_file = self._upload_and_wait(file_path)
             
             print(f"    [DOCUMENT_SERVICE] File uploaded successfully")
-            print(f"    [DOCUMENT_SERVICE] Calling Google Gemini for extraction...")
-            print(f"    [DOCUMENT_SERVICE] Model: {self.settings.llm_model}")
+            print(f"    [DOCUMENT_SERVICE] Calling Zhipu GLM for extraction...")
+            print(f"    [DOCUMENT_SERVICE] Vision extraction pipeline: active")
 
             if self._sdk == "new":
                 response = self.client.models.generate_content(
@@ -343,7 +343,7 @@ Now analyze the provided document and return ONLY valid JSON."""
                     }
                 )
 
-            print(f"    [DOCUMENT_SERVICE] Google Gemini response received")
+            print(f"    [DOCUMENT_SERVICE] Zhipu GLM response received")
             print(f"    [DOCUMENT_SERVICE] Parsing JSON response...")
             
             # Show first 500 chars of raw response for debugging
@@ -378,9 +378,9 @@ Now analyze the provided document and return ONLY valid JSON."""
             return result
             
         except Exception as e:
-            print(f"    [DOCUMENT_SERVICE] FAILED - Google Gemini error: {str(e)}")
+            print(f"    [DOCUMENT_SERVICE] FAILED - Zhipu GLM error: {str(e)}")
             print()
-            raise Exception(f"Google Gemini extraction failed: {str(e)}")
+            raise Exception(f"Zhipu GLM extraction failed: {str(e)}")
 
 # Example usage in your main app
 if __name__ == "__main__":

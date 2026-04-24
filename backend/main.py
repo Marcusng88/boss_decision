@@ -264,8 +264,8 @@ async def upload_document(
         print(f"[STEP 2] SUCCESS - source_document record created (ID: {source_id})")
         print()
         
-        # Step 3: Extract data with document_service (Gemini AI)
-        print("[STEP 3] DOCUMENT EXTRACTION - Starting AI extraction with Google Gemini...")
+        # Step 3: Extract data with document_service (Zhipu GLM)
+        print("[STEP 3] DOCUMENT EXTRACTION - Starting AI extraction with Zhipu GLM...")
         extraction_json = None
         doc_type = "Unknown"
         
