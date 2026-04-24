@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -109,17 +110,27 @@ class UnifiedLLMClient:
         payload = self._payload(system_prompt, user_prompt, temperature, max_tokens)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            try:
-                resp = await client.post(url, headers=headers, json=payload)
-                resp.raise_for_status()
+            for attempt in range(3):
+                try:
+                    resp = await client.post(url, headers=headers, json=payload)
+                    
+                    if resp.status_code == 429:
+                        wait_time = (attempt + 1) * 2
+                        print(f"[LLM] Rate limited (429). Retrying in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                        
+                    resp.raise_for_status()
+                    data = resp.json()
+                    text = self._extract_text(data)
+                    return LLMResponse(text=text, model=self.model)
 
-                data = resp.json()
-                text = self._extract_text(data)
-
-                return LLMResponse(text=text, model=self.model)
-
-            except Exception as e:
-                raise Exception(f"LLM request failed: {url} | {str(e)}")
+                except Exception as e:
+                    if attempt == 2:
+                        raise Exception(f"LLM request failed after 3 attempts: {url} | {str(e)}")
+                    await asyncio.sleep(1)
+        
+        raise Exception("LLM request failed due to unknown error.")
 
     def complete_text(
         self,

@@ -10,6 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("boss_decision")
 
 from config import get_settings
 from services.local_knowledge_service import LocalKnowledgeService
@@ -67,11 +72,13 @@ document_ingestor = DocumentIngestor()
 class AnalyzeRequest(BaseModel):
     """Request model for analyze endpoint."""
     query: str
-    context: Optional[str] = None
     target_type: Optional[str] = None
     target_id: Optional[int] = None
-    submitted_by: Optional[str] = None
-    document_summary: Optional[str] = None
+    context: Optional[str] = None
+    document_path: Optional[str] = None
+    # New fields for Group Chat modes
+    mode: str = "hybrid"  # "hybrid" (dynamic) or "manual"
+    forced_agents: Optional[list[str]] = None
     document_department: Optional[str] = None
     document_entities: Optional[list[dict]] = None
     document_tags: Optional[list[str]] = None
@@ -202,12 +209,15 @@ async def analyze_query(request: AnalyzeRequest):
             target_type=request.target_type,
             target_id=request.target_id,
             submitted_by=request.submitted_by,
+            mode=request.mode,
+            forced_agents=request.forced_agents,
             document_analysis={
                 "summary": request.document_summary,
                 "department": request.document_department,
                 "entities": request.document_entities or [],
                 "tags": request.document_tags or [],
             } if request.document_summary or request.document_department else None,
+            knowledge_service=knowledge,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
@@ -220,9 +230,19 @@ async def analyze_query_with_upload(
     target_type: str | None = Form(default=None),
     target_id: int | None = Form(default=None),
     submitted_by: str | None = Form(default="frontend"),
+    mode: str = Form(default="hybrid"),
+    forced_agents_json: str | None = Form(default=None, alias="forced_agents"),
     document: UploadFile | None = File(default=None),
 ):
     """Analyze decision query with optional uploaded file context."""
+    # Parse forced_agents from JSON if provided
+    forced_agents = None
+    if forced_agents_json:
+        try:
+            forced_agents = json.loads(forced_agents_json)
+        except:
+            forced_agents = [forced_agents_json] # fallback if it's just a comma string or single name
+
     try:
         extracted_document = None
 
@@ -234,9 +254,13 @@ async def analyze_query_with_upload(
                 tmp_path = tmp.name
 
             try:
-                extracted_document = await document_ingestor.aprocess(tmp_path)
+                extracted_document = await document_ingestor.aprocess(tmp_path, knowledge_service=knowledge)
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
+
+        logger.info("\n[API] Analyzing query: %s", query)
+        if document:
+            logger.info("[API] Uploaded file detected: %s", document.filename)
 
         response = await _run_analysis(
             query=query,
@@ -244,11 +268,16 @@ async def analyze_query_with_upload(
             target_type=target_type,
             target_id=target_id,
             submitted_by=submitted_by,
+            mode=mode,
+            forced_agents=forced_agents,
             document_analysis=extracted_document,
+            knowledge_service=knowledge,
         )
 
         if extracted_document:
             response["document_analysis"] = extracted_document
+        
+        logger.info("[API] Analysis completed for case: %s", response.get('case_id'))
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload analysis failed: {str(e)}")
@@ -262,6 +291,9 @@ async def _run_analysis(
     target_id: int | None,
     submitted_by: str | None,
     document_analysis: dict | None,
+    knowledge_service: LocalKnowledgeService,
+    mode: str = "hybrid",
+    forced_agents: list[str] | None = None,
 ):
     case = await knowledge.create_decision_case(
         question=query,
@@ -291,9 +323,12 @@ async def _run_analysis(
         orchestration_context["document_tags"] = document_analysis.get("tags", [])
         orchestration_context["document_metadata"] = document_analysis.get("metadata", {})
 
+    # 4. Orchestrate decision
+    logger.info("[API] Running orchestration (mode=%s, forced=%s)", mode, forced_agents)
     orchestration = await manager_agent.orchestrate_dynamic(
         query=query,
         context=orchestration_context,
+        forced_agents=forced_agents if mode == "manual" else None
     )
     final_decision = orchestration["final_decision"]
 

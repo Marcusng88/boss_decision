@@ -339,14 +339,33 @@ Return JSON only:
                 evidence_used=[{"source": "fallback", "detail": f"{department}_degraded_analysis"}],
             )
 
-    async def orchestrate_dynamic(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Dynamically route and execute selected agents with manager TLDR output."""
-        routing = await self.route_agents(query, context)
-        selected_names: List[str] = routing.get("selected_agents", [])
+    async def orchestrate_dynamic(
+        self, 
+        query: str, 
+        context: Dict[str, Any], 
+        forced_agents: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Dynamically route or use forced agents, then execute and synthesize."""
+        if forced_agents:
+            logger.info("\n[Manager] Using FORCED agents: %s", forced_agents)
+            selected_names = forced_agents
+            routing = {
+                "selected_agents": selected_names,
+                "reasoning": "User manually selected specific agents.",
+                "confidence": 1.0,
+                "route_source": "manual"
+            }
+        else:
+            logger.info("\n[Manager] Routing query: %s...", query[:100])
+            routing = await self.route_agents(query, context)
+            selected_names = routing.get("selected_agents", [])
+            logger.info("[Manager] Selected agents: %s", selected_names)
+        
         force_simple_llm = bool(context.get("force_simple_llm_subagents", False))
 
         agent_insights: List[AgentInsight] = []
         for name in selected_names:
+            logger.info("[Manager] Executing agent: %s", name)
             if force_simple_llm:
                 insight = await self._llm_subagent_reply(name, query, context)
                 agent_insights.append(insight)
@@ -354,6 +373,7 @@ Return JSON only:
 
             agent = self.agent_registry.get(name)
             if agent is None:
+                logger.info("[Manager] Agent '%s' not found in registry, using simple LLM reply.", name)
                 insight = await self._llm_subagent_reply(name, query, context)
                 agent_insights.append(insight)
                 continue
@@ -361,6 +381,7 @@ Return JSON only:
             try:
                 insight = await agent.run(query, context)
             except Exception as exc:
+                logger.error("[Manager] Agent '%s' failed: %s", name, exc)
                 insight = AgentInsight(
                     agent_name=getattr(agent, "agent_name", agent.__class__.__name__),
                     findings=["Agent execution failed"],
@@ -371,6 +392,7 @@ Return JSON only:
                 )
             agent_insights.append(insight)
 
+        logger.info("[Manager] Synthesizing final decision...")
         conservative_view = await self._generate_conservative_view(agent_insights, query)
         aggressive_view = await self._generate_aggressive_view(agent_insights, query)
         final_decision = await self._synthesize_decision(

@@ -12,6 +12,10 @@ What it validates:
 import asyncio
 import json
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env
+load_dotenv()
 
 from agents import (
     HRAgent,
@@ -25,34 +29,35 @@ from services.document_service import DocumentIngestor
 from services.local_knowledge_service import LocalKnowledgeService
 
 
-def _try_extract_document(file_path: str | None) -> dict:
+async def _try_extract_document(file_path: str | None, knowledge: LocalKnowledgeService) -> dict:
     if not file_path:
         return {}
 
     path = Path(file_path).expanduser().resolve()
-    if not path.exists() or not path.is_file():
-        print(f"[WARN] File not found: {path}")
+    if not path.exists() and not path.is_dir():
+        print(f"[WARN] Path not found: {path}")
         return {}
 
     try:
         ingestor = DocumentIngestor()
-        extracted = ingestor.process(str(path))
-        print("[INFO] Document extraction completed.")
+        # Ingestor aprocess handles both files and folders
+        extracted = await ingestor.aprocess(str(path), knowledge_service=knowledge)
+        print("[INFO] Extraction completed.")
         print(json.dumps(extracted, indent=2))
         return extracted
     except Exception as exc:
-        print(f"[WARN] Document extraction failed: {exc}")
+        print(f"[WARN] Extraction failed: {exc}")
         return {}
 
 
-async def _run_once(manager: ManagerAgent):
+async def _run_once(manager: ManagerAgent, knowledge: LocalKnowledgeService):
     print("\n=== Manager Routing Validation ===")
     query = input("Enter your business question (or 'exit'): ").strip()
     if query.lower() in {"exit", "quit", "q"}:
         return False
 
-    file_path = input("Optional file path (image/doc/md), press Enter to skip: ").strip()
-    extracted = _try_extract_document(file_path if file_path else None)
+    file_path = input("Optional file/folder path, press Enter to skip: ").strip()
+    extracted = await _try_extract_document(file_path if file_path else None, knowledge)
 
     context = {
         "target_type": input("Optional target_type (e.g., employee), Enter to skip: ").strip() or None,
@@ -145,7 +150,7 @@ async def main():
 
     keep_running = True
     while keep_running:
-        keep_running = await _run_once(manager)
+        keep_running = await _run_once(manager, knowledge)
 
     print("Validator stopped.")
 

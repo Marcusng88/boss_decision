@@ -9,8 +9,12 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Any
 
 from pydantic import BaseModel
+from dotenv import load_dotenv
 
 from services.llm_client import UnifiedLLMClient
+
+# Ensure env vars are loaded for all agents
+load_dotenv()
 
 
 class AgentInsight(BaseModel):

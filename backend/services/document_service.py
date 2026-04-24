@@ -286,7 +286,6 @@ Output JSON schema:
             user_prompt=user_prompt,
             temperature=self.settings.llm_temperature,
             max_tokens=700,
-            model=self.settings.llm_model,
         )
         parsed["provider"] = "unified_llm"
         parsed["model_used"] = model_used
@@ -309,10 +308,46 @@ Output JSON schema:
             "metadata": metadata,
         }
 
-    async def aprocess(self, file_path: str) -> Dict[str, Any]:
-        path = self._validate_file(file_path)
+    async def aprocess(self, file_path: str, knowledge_service: LocalKnowledgeService | None = None) -> Dict[str, Any]:
+        path = Path(file_path).expanduser().resolve()
+        
+        # Handle directory ingestion if path is a folder
+        if path.is_dir():
+            results = []
+            for sub_path in path.rglob("*"):
+                if sub_path.is_file() and sub_path.suffix.lower() in ALLOWED_EXTENSIONS:
+                    try:
+                        res = await self.aprocess(str(sub_path), knowledge_service)
+                        results.append(res)
+                    except Exception as exc:
+                        print(f"[DocumentIngestor] Failed to process {sub_path}: {exc}")
+            
+            # Aggregate folder results
+            if not results:
+                return {"summary": "Empty or unsupported folder.", "department": "Operations", "tags": ["empty"]}
+            
+            combined_summary = "\n".join([f"- {r.get('metadata', {}).get('name')}: {r.get('summary')}" for r in results[:5]])
+            all_tags = set()
+            for r in results:
+                all_tags.update(r.get("tags", []))
+            
+            return {
+                "document_type": "folder",
+                "department": results[0].get("department", "Operations"), # Use first file's dept as hint
+                "confidence": 0.8,
+                "summary": f"Folder ingestion of {len(results)} files. Key contents:\n{combined_summary}",
+                "tags": list(all_tags),
+                "entities": [e for r in results for e in r.get("entities", [])][:20],
+                "metadata": {"path": str(path), "file_count": len(results)}
+            }
+
         content = self._read_text_payload(path)
         metadata, default_department, system_prompt, user_prompt = self._build_prompt_payload(path, content)
+        
+        # If knowledge service is provided, we can "dynamically read" or even cache
+        if knowledge_service:
+            knowledge_service.add_document(f"ingested_{path.name}", content)
+
         error_chain: list[str] = []
 
         if self.gemini_client is not None:

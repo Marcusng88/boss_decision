@@ -138,6 +138,13 @@ class LocalKnowledgeService:
 
         return results
 
+    def add_document(self, name: str, content: str):
+        """Save a document to the knowledge base."""
+        doc_path = self.documents_dir / f"{name}.txt"
+        doc_path.write_text(content, encoding="utf-8")
+        logger.info(f"Added document to knowledge base: {doc_path}")
+        return doc_path
+
     async def get_case_evidence(self, case_id: str) -> List[Dict[str, Any]]:
         """Read stored evidence links for a decision case."""
         evidence_path = self.raw_dir / f"evidence_{case_id}.json"

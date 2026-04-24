@@ -41,6 +41,9 @@ const Index = () => {
     targetType?: string;
     targetId?: number;
     allowMockFallback: boolean;
+    document?: File;
+    mode: string;
+    forcedAgents?: string[];
   }) => {
     setIsAnalyzing(true);
     setError("");
@@ -51,6 +54,9 @@ const Index = () => {
         targetType: payload.targetType,
         targetId: payload.targetId,
         allowMockFallback: payload.allowMockFallback,
+        document: payload.document,
+        mode: payload.mode,
+        forcedAgents: payload.forcedAgents,
       });
       setResult(analyzed);
     } catch (e) {

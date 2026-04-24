@@ -53,6 +53,8 @@ export interface AnalyzeOptions {
   targetId?: number;
   allowMockFallback: boolean;
   document?: File;
+  mode?: string;
+  forcedAgents?: string[];
 }
 
 interface BackendAnalyzeResponse {
@@ -243,6 +245,8 @@ export async function analyzeDecision(query: string, options: AnalyzeOptions): P
       if (options.targetType) form.append("target_type", options.targetType);
       if (typeof options.targetId === "number") form.append("target_id", String(options.targetId));
       form.append("submitted_by", "frontend");
+      if (options.mode) form.append("mode", options.mode);
+      if (options.forcedAgents) form.append("forced_agents", JSON.stringify(options.forcedAgents));
       form.append("document", options.document);
 
       response = await fetch(`${backendUrl}/api/analyze/upload`, {
@@ -261,6 +265,8 @@ export async function analyzeDecision(query: string, options: AnalyzeOptions): P
           target_type: options.targetType,
           target_id: options.targetId,
           submitted_by: "frontend",
+          mode: options.mode || "hybrid",
+          forced_agents: options.forcedAgents,
         }),
       });
     }
