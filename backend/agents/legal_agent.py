@@ -1,104 +1,138 @@
-"""
-Legal Agent - Reviews compliance, due process, and policy risk.
-"""
+"""Legal Agent — policies, contracts, compliance, legal cases."""
+import json
+import re
 from typing import Dict, List, Any
-
 from .base_agent import BaseAgent, AgentInsight
+from .llm_client import llm_json
+
+SYSTEM_PROMPT = """You are a Legal compliance analyst for an AI business decision engine.
+Analyze the legal data provided (policies, contracts, cases) and return ONLY valid JSON:
+{
+  "findings": ["finding1", "finding2", "finding3"],
+  "risks": ["risk1", "risk2"],
+  "recommendation": "single actionable legal recommendation",
+  "confidence": 0.80,
+  "data_summary": "brief 3-5 word summary",
+  "metric_value": "key metric e.g. 'RM 20,000 severance'",
+  "trend": "up or down or flat"
+}
+Focus on: applicable policies, contractual obligations, legal risk, compliance requirements,
+termination legality, notice periods, severance calculations.
+Context is Malaysian employment law.
+"""
+
+CATEGORY_MAP = {
+    "termination": ["termination", "compliance", "performance"],
+    "expansion": ["expansion", "compliance"],
+    "procurement": ["procurement", "contracts"],
+    "acquisition": ["acquisition", "contracts", "compliance"],
+}
 
 
 class LegalAgent(BaseAgent):
-    async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        evidence: List[Dict[str, Any]] = []
 
+    async def _resolve_employee_id(self, context: Dict[str, Any]):
+        if context.get("target_type") == "employee":
+            if context.get("target_id"):
+                return int(context["target_id"])
+            if context.get("target_name"):
+                raw = re.sub(r"employee\s*#?\d*\s*", "", str(context["target_name"]),
+                             flags=re.IGNORECASE).strip()
+                if raw and not raw.isdigit():
+                    try:
+                        results = await self.db.search_employees_by_name(raw)
+                        if results:
+                            return results[0].get("employee_id")
+                    except Exception:
+                        pass
+        return None
+
+    async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        evidence = []
+
+        # Uploaded document context
+        if context.get("document_summary"):
+            evidence.append({
+                "source": "uploaded_document",
+                "path": context.get("document_path", "(runtime_upload)"),
+                "department": context.get("document_department", "Legal"),
+                "summary": context.get("document_summary"),
+                "tags": context.get("document_tags", []),
+            })
+
+        # Policies filtered by query category
+        cats = CATEGORY_MAP.get(context.get("query_category", ""), [])
         try:
-            docs = await self.db.get_department_documents("legal")
-            evidence.extend(docs)
+            all_policies = await self.db.get_legal_policies()
+            relevant = [p for p in all_policies if not cats or p.get("policy_category") in cats]
+            evidence.extend([
+                {"source": "legal_policy", "type": "policy",
+                 "record_id": p.get("legal_id"), "data": p}
+                for p in relevant
+            ])
         except Exception:
             pass
 
-        if context.get("document_summary"):
-            evidence.append(
-                {
-                    "source": "uploaded_document",
-                    "path": context.get("document_path", "(runtime_upload)"),
-                    "department": context.get("document_department", "unknown"),
-                    "summary": context.get("document_summary"),
-                    "tags": context.get("document_tags", []),
-                }
-            )
+        # Employee-specific: contracts and cases
+        emp_id = await self._resolve_employee_id(context)
+        if emp_id:
+            try:
+                contracts = await self.db.get_legal_contracts(employee_id=emp_id)
+                evidence.extend([
+                    {"source": "legal_contract", "type": "contract",
+                     "record_id": c.get("id") or c.get("contract_id"), "data": c}
+                    for c in contracts
+                ])
+            except Exception:
+                pass
+            try:
+                cases = await self.db.get_legal_cases(employee_id=emp_id)
+                evidence.extend([
+                    {"source": "legal_cases", "type": "case",
+                     "record_id": c.get("case_id"), "data": c}
+                    for c in cases
+                ])
+            except Exception:
+                pass
 
         return evidence
 
-    # ------------------------------------------------------------------
-    # Rule-based core analysis
-    # ------------------------------------------------------------------
-
-    def _rule_based_analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
-        """Produce structured insights from pure rule-based logic."""
-        findings: List[str] = []
-        risks: List[str] = []
-
+    async def analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
         if not evidence:
             return AgentInsight(
-                agent_name="Legal",
-                findings=["No legal or HR policy documents found in the knowledge base"],
-                risks=["Compliance position unclear without policy evidence"],
-                recommendation="Obtain and review applicable employment law and internal HR policy before taking action",
-                confidence=0.35,
-                evidence_used=[],
+                agent_name="Legal", emoji="⚖️",
+                findings=["No legal records found"],
+                risks=["Cannot assess legal risk without policy data"],
+                recommendation="Consult legal team directly",
+                confidence=0.0,
+                evidence_used=evidence,
             )
 
-        summaries = [str(item.get("summary", "")).strip() for item in evidence if item.get("summary")]
-        combined = " ".join(summaries).lower()
+        data_str = json.dumps([e["data"] for e in evidence if e.get("data")], default=str, indent=2)
+        user_msg = f"Query: {query}\n\nLegal Data:\n{data_str[:8000]}"
 
-        findings.append("Legal review completed against available policy evidence")
-
-        if "pip" in combined or "due process" in combined:
-            findings.append("Due process and PIP sequencing are material to legal compliance")
-        if "warning" in combined:
-            findings.append("Warning history is a key factor in substantiating dismissal")
-        if "unfair dismissal" in combined:
-            findings.append("Document explicitly references unfair dismissal risk — must follow formal process")
-
-        if "termination" in query.lower() or "fire" in query.lower() or "dismissal" in combined:
-            risks.append("Termination without completed PIP and documented due process creates unfair dismissal liability")
-        if "high" in combined and "risk" in combined:
-            risks.append("Policy notes indicate elevated legal compliance risk")
-        if "pip" in combined and "not initiated" in combined:
-            risks.append("PIP has not been started — premature termination is legally indefensible")
-
-        recommendation = "Proceed only after completing the due-process checklist: formal warnings → PIP initiation → PIP outcome assessment → termination if warranted"
-        if not risks:
-            recommendation = "No immediate legal blockers found; proceed with documented controls and contemporaneous records"
-
-        return AgentInsight(
-            agent_name="Legal",
-            findings=findings,
-            risks=risks,
-            recommendation=recommendation,
-            confidence=0.72,
-            evidence_used=evidence,
-        )
-
-    async def analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
-        """Analyze legal compliance evidence using rule-based logic enhanced by LLM."""
-        fallback = self._rule_based_analyze(evidence, query)
-
-        evidence_parts: List[str] = []
-        for e in evidence:
-            summary = e.get("summary", "")
-            if summary:
-                evidence_parts.append(f"Policy/document summary: {summary}")
-        evidence_summary = "\n".join(evidence_parts) if evidence_parts else "No legal documents found."
-
-        return await self._llm_analyze(
-            query=query,
-            evidence_summary=evidence_summary,
-            domain_role="employment law and HR compliance specialist",
-            domain_focus=(
-                "Legal due-process requirements for employee termination, unfair dismissal risk, "
-                "PIP (Performance Improvement Plan) sequencing mandated by HR policy, "
-                "and the employer's evidentiary burden to justify termination."
-            ),
-            fallback_insight=fallback,
-        )
+        try:
+            result = await llm_json(SYSTEM_PROMPT, user_msg)
+            return AgentInsight(
+                agent_name="Legal", emoji="⚖️",
+                findings=result.get("findings", []),
+                risks=result.get("risks", []),
+                recommendation=result.get("recommendation", "See legal findings above"),
+                confidence=float(result.get("confidence", 0.80)),
+                evidence_used=evidence,
+                data_summary=result.get("data_summary", "Legal compliance check"),
+                metric_value=result.get("metric_value", ""),
+                trend=result.get("trend", "flat"),
+            )
+        except Exception:
+            return AgentInsight(
+                agent_name="Legal", emoji="⚖️",
+                findings=["Legal policies retrieved", f"{len(evidence)} legal records analyzed"],
+                risks=["Ensure compliance with Malaysian Employment Act 1955",
+                       "Verify notice period and severance requirements"],
+                recommendation="Consult legal policies before proceeding; ensure full compliance",
+                confidence=0.65,
+                evidence_used=evidence,
+                data_summary="Legal policy review",
+                metric_value=f"{len(evidence)} records",
+            )

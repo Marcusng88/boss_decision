@@ -68,6 +68,41 @@ class DatabaseService:
         response = query.execute()
         return response.data
     
+    async def search_employees_by_name(self, name: str):
+        """Search employees by partial name match."""
+        response = self.client.table('employee') \
+            .select('employee_id, name, position, dept_id') \
+            .ilike('name', f'%{name}%') \
+            .limit(5) \
+            .execute()
+        return response.data or []
+
+    async def get_legal_contracts(self, employee_id: int = None):
+        """Get legal contracts, optionally filtered by employee."""
+        query = self.client.table('legal_contract').select('*')
+        if employee_id is not None:
+            query = query.eq('employee_id', employee_id)
+        response = query.order('created_at', desc=True).limit(20).execute()
+        return response.data or []
+
+    async def get_legal_cases(self, employee_id: int = None):
+        """Get legal cases, optionally filtered by employee."""
+        query = self.client.table('legal_cases').select('*')
+        if employee_id is not None:
+            query = query.eq('employee_id', employee_id)
+        response = query.order('created_at', desc=True).limit(20).execute()
+        return response.data or []
+
+    async def get_finance_records(self, employee_id: int = None, dept_id: int = None):
+        """Get finance records filtered by employee or department."""
+        query = self.client.table('finance_record').select('*')
+        if employee_id is not None:
+            query = query.eq('employee_id', employee_id)
+        elif dept_id is not None:
+            query = query.eq('dept_id', dept_id)
+        response = query.order('period', desc=True).limit(30).execute()
+        return response.data or []
+
     async def get_case_evidence(self, case_id: int):
         """Get all evidence linked to a decision case."""
         response = self.client.table('case_evidence') \

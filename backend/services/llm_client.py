@@ -51,8 +51,10 @@ def _backoff_seconds(attempt: int, resp: Optional[httpx.Response] = None) -> flo
     return max(3.0, wait)
 
 
-def _strip_json_fence(text: str) -> str:
-    text = text.strip()
+def _strip_json_fence(text) -> str:
+    if not text:
+        return ""
+    text = str(text).strip()
     if text.startswith("```json"):
         text = text[7:]
     elif text.startswith("```"):
@@ -62,8 +64,10 @@ def _strip_json_fence(text: str) -> str:
     return text.strip()
 
 
-def _extract_json_object_text(raw: str) -> str:
+def _extract_json_object_text(raw) -> str:
     raw = _strip_json_fence(raw)
+    if not raw:
+        return ""
     start = raw.find("{")
     end = raw.rfind("}")
     if start != -1 and end != -1 and end >= start:
@@ -89,19 +93,18 @@ class UnifiedLLMClient:
 
     @classmethod
     def from_settings(cls) -> Optional["UnifiedLLMClient"]:
-        """
-        Enforces correct pairing of API key + endpoint for Gemini.
-        """
-        provider = os.getenv("LLM_PROVIDER", "gemini").lower()
-
-        if provider == "gemini":
-            return cls(
-                api_key=os.getenv("GOOGLE_API_KEY"),
-                model=os.getenv("LLM_MODEL", "gemini-2.5-flash-lite"),
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-            )
-
-        return None
+        """Use Zhipu AI (OpenAI-compatible) as the sole LLM provider."""
+        api_key = os.getenv("ZHIPU_API_KEY")
+        if not api_key:
+            logger.warning("[LLM] ZHIPU_API_KEY not set — LLM client disabled")
+            return None
+        base_url = os.getenv("ZHIPU_BASE_URL", "https://api.ilmu.ai/v1").rstrip("/")
+        model = os.getenv("ZHIPU_MODEL", "ilmu-glm-5.1")
+        return cls(
+            api_key=api_key,
+            model=model,
+            base_url=f"{base_url}/chat/completions",
+        )
 
     def _endpoint(self) -> str:
         """

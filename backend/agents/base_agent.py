@@ -24,7 +24,12 @@ class AgentInsight(BaseModel):
     risks: List[str]
     recommendation: str
     confidence: float  # 0.0 to 1.0
-    evidence_used: List[Dict[str, Any]]  # List of record IDs and sources
+    evidence_used: List[Dict[str, Any]] = []
+    # Optional enrichment fields (used by HR, Legal, Finance)
+    emoji: str = ""
+    data_summary: str = ""
+    metric_value: str = ""
+    trend: str = "flat"
 
 
 class BaseAgent(ABC):

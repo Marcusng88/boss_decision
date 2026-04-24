@@ -28,6 +28,7 @@ from agents import (
     HRAgent,
     SalesAgent,
     LegalAgent,
+    FinanceAgent,
     MarketingAgent,
     SupplyChainAgent,
     ManagerAgent,
@@ -60,15 +61,17 @@ app.add_middleware(
 # Local filesystem knowledge + shared Supabase client for company tables
 knowledge = LocalKnowledgeService()
 db = DatabaseService()
-hr_agent = HRAgent(knowledge)
+hr_agent = HRAgent(db)
 sales_agent = SalesAgent(knowledge, company_db=db)
-legal_agent = LegalAgent(knowledge)
+legal_agent = LegalAgent(db)
+finance_agent = FinanceAgent(db)
 marketing_agent = MarketingAgent(knowledge, company_db=db)
-supply_chain_agent = SupplyChainAgent(knowledge)
+supply_chain_agent = SupplyChainAgent(knowledge, company_db=db)
 manager_agent = ManagerAgent([
     hr_agent,
     sales_agent,
     legal_agent,
+    finance_agent,
     marketing_agent,
     supply_chain_agent,
 ])

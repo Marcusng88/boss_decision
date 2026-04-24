@@ -29,9 +29,9 @@ class Settings(BaseSettings):
 
     # LLM Configuration (manager + document extraction)
     google_api_key: Optional[str] = None
-    llm_provider: str = "gemini"
+    llm_provider: str = "zhipu"
     openai_api_key: Optional[str] = None
-    llm_model: str = "gemini-2.5-flash-lite"
+    llm_model: str = "ilmu-glm-5.1"
     llm_temperature: float = 0.7
 
     # LangChain Configuration

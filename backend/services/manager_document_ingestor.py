@@ -15,7 +15,7 @@ from typing import Any, Dict
 
 from dotenv import load_dotenv
 
-from services.llm_client import UnifiedLLMClient
+from openai import AsyncOpenAI
 
 try:
     from google import genai as google_genai
@@ -26,6 +26,11 @@ try:
     from docx import Document as DocxDocument
 except Exception:  # pragma: no cover - optional runtime dependency
     DocxDocument = None
+
+try:
+    import pypdf as _pypdf
+except Exception:
+    _pypdf = None
 
 
 @dataclass
@@ -65,7 +70,20 @@ class ManagerDocumentIngestor:
 
     def __init__(self):
         self.settings = load_document_settings()
-        self.llm_client = UnifiedLLMClient.from_settings()
+        # Use AsyncOpenAI (same path as domain agents) — no httpx lock, no invalid-JSON risk
+        self._openai_client: AsyncOpenAI | None = None
+        self._openai_model: str = "nemo-super"
+        try:
+            backend_root = Path(__file__).resolve().parents[1]
+            load_dotenv(dotenv_path=backend_root / ".env")
+            api_key = os.getenv("ZHIPU_API_KEY")
+            base_url = os.getenv("ZHIPU_BASE_URL", "https://api.ilmu.ai/v1")
+            self._openai_model = os.getenv("ZHIPU_MODEL", "nemo-super")
+            if api_key:
+                self._openai_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        except Exception:
+            self._openai_client = None
+
         self.gemini_client = None
         if google_genai is not None and self.settings.google_api_key:
             try:
@@ -107,7 +125,15 @@ class ManagerDocumentIngestor:
             except Exception:
                 return ""
 
-        # For binaries/images/PDF without OCR: keep metadata-only fallback.
+        if ext == ".pdf" and _pypdf is not None:
+            try:
+                reader = _pypdf.PdfReader(str(path))
+                pages = [page.extract_text() or "" for page in reader.pages]
+                return "\n".join(pages).strip()[:14000]
+            except Exception:
+                return ""
+
+        # Images and unsupported binaries: no text content available.
         return ""
 
     @staticmethod
@@ -277,17 +303,24 @@ Output JSON schema:
         system_prompt: str,
         user_prompt: str,
     ) -> Dict[str, Any]:
-        if not self.llm_client:
+        if self._openai_client is None:
             raise RuntimeError("LLM client unavailable")
 
-        parsed, model_used = await self.llm_client.acomplete_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
+        response = await self._openai_client.chat.completions.create(
+            model=self._openai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
             temperature=self.settings.llm_temperature,
-            max_tokens=700,
+            max_tokens=800,
         )
-        parsed["provider"] = "unified_llm"
-        parsed["model_used"] = model_used
+        raw = (response.choices[0].message.content or "").strip()
+        if not raw:
+            raise ValueError("LLM returned empty content")
+        parsed = self._parse_json_text(raw)
+        parsed["provider"] = "zhipu_openai"
+        parsed["model_used"] = self._openai_model
         if not parsed.get("department"):
             parsed["department"] = default_department
         return parsed
