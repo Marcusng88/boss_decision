@@ -57,12 +57,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize local knowledge service and agents
+# Local filesystem knowledge + shared Supabase client for company tables
 knowledge = LocalKnowledgeService()
+db = DatabaseService()
 hr_agent = HRAgent(knowledge)
-sales_agent = SalesAgent(knowledge)
+sales_agent = SalesAgent(knowledge, company_db=db)
 legal_agent = LegalAgent(knowledge)
-marketing_agent = MarketingAgent(knowledge)
+marketing_agent = MarketingAgent(knowledge, company_db=db)
 supply_chain_agent = SupplyChainAgent(knowledge)
 manager_agent = ManagerAgent([
     hr_agent,
@@ -71,7 +72,6 @@ manager_agent = ManagerAgent([
     marketing_agent,
     supply_chain_agent,
 ])
-db = DatabaseService()
 manager_document_ingestor = ManagerDocumentIngestor()
 
 

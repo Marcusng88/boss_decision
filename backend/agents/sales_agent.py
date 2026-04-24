@@ -1,9 +1,12 @@
 """
 Sales Agent - Analyzes revenue contribution, deal pipeline, sales performance.
 """
-from typing import Dict, List, Any
+import logging
+from typing import Any, Dict, List, Optional
 
 from .base_agent import BaseAgent, AgentInsight
+
+logger = logging.getLogger(__name__)
 
 
 class SalesAgent(BaseAgent):
@@ -11,6 +14,12 @@ class SalesAgent(BaseAgent):
     Sales domain specialist agent.
     Focuses on: revenue contribution, deals closed, pipeline health, quota attainment.
     """
+
+    def __init__(self, knowledge, company_db: Optional[Any] = None, llm=None):
+        super().__init__(knowledge, llm)
+        self._company_db = company_db
+        if company_db is not None:
+            logger.info("SalesAgent: Supabase reads enabled (sales_record + shallow context)")
 
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -35,21 +44,62 @@ class SalesAgent(BaseAgent):
                 }
             )
 
-        # If target is an employee, get their sales records
-        if context.get("target_type") == "employee" and context.get("target_id"):
-            employee_id = context["target_id"]
-            sales_records = await self.db.get_employee_sales_records(employee_id)
-            evidence.extend(
-                [
-                    {
-                        "source": "sales_record",
-                        "type": "deal",
-                        "record_id": record["sales_id"],
-                        "data": record,
-                    }
-                    for record in sales_records
-                ]
-            )
+        if self._company_db is not None:
+            try:
+                eid = context.get("target_id") if context.get("target_type") == "employee" else None
+                sales_rows = await self._company_db.fetch_sales_records_for_agent(
+                    limit=80,
+                    employee_id=eid,
+                )
+                for row in sales_rows:
+                    evidence.append(
+                        {
+                            "source": "supabase_sales_record",
+                            "type": "deal",
+                            "record_id": row.get("sales_id"),
+                            "data": row,
+                        }
+                    )
+                if eid is not None:
+                    emp = await self._company_db.get_employee(eid)
+                    if emp:
+                        evidence.append({"source": "supabase_employee", "data": emp})
+                    hr_sk = await self._company_db.fetch_hr_shallow_for_employee(eid, limit=8)
+                    if hr_sk:
+                        evidence.append(
+                            {
+                                "source": "supabase_hr_sketch",
+                                "note": "Light cross-check only; full HR review is a separate agent.",
+                                "rows": hr_sk,
+                            }
+                        )
+                depts = await self._company_db.fetch_departments_all()
+                if depts:
+                    evidence.append(
+                        {
+                            "source": "supabase_departments_sketch",
+                            "row_count": len(depts),
+                            "rows": depts,
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("SalesAgent: Supabase evidence failed: %s", exc)
+        else:
+            # If target is an employee, get their sales records from local knowledge files
+            if context.get("target_type") == "employee" and context.get("target_id"):
+                employee_id = context["target_id"]
+                sales_records = await self.db.get_employee_sales_records(employee_id)
+                evidence.extend(
+                    [
+                        {
+                            "source": "sales_record",
+                            "type": "deal",
+                            "record_id": record["sales_id"],
+                            "data": record,
+                        }
+                        for record in sales_records
+                    ]
+                )
 
         return evidence
 
@@ -59,7 +109,11 @@ class SalesAgent(BaseAgent):
 
     def _rule_based_analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
         """Produce structured insights from pure rule-based logic."""
-        sales_records = [e["data"] for e in evidence if e.get("source") == "sales_record"]
+        sales_records = [
+            e["data"]
+            for e in evidence
+            if e.get("source") in ("sales_record", "supabase_sales_record") and e.get("data")
+        ]
         doc_summaries = [
             e["summary"] for e in evidence if e.get("source") == "uploaded_document" and e.get("summary")
         ]
@@ -148,10 +202,23 @@ class SalesAgent(BaseAgent):
         for e in evidence:
             if e.get("source") == "uploaded_document":
                 evidence_parts.append(f"Document summary: {e.get('summary', '')}")
-            elif e.get("source") == "sales_record":
+            elif e.get("source") in ("sales_record", "supabase_sales_record"):
                 data = e.get("data", {})
                 evidence_parts.append(
                     f"Deal — stage: {data.get('deal_stage')}, amount: {data.get('amount')}, period: {data.get('period')}"
+                )
+            elif e.get("source") == "supabase_employee" and e.get("data"):
+                d = e["data"]
+                evidence_parts.append(
+                    f"Employee (DB): {d.get('name', '')} | role: {d.get('role', '')} | id: {d.get('employee_id')}"
+                )
+            elif e.get("source") == "supabase_departments_sketch":
+                evidence_parts.append(
+                    f"Departments (sketch, {e.get('row_count', 0)} rows): {e.get('rows', [])!s}"[:2000]
+                )
+            elif e.get("source") == "supabase_hr_sketch":
+                evidence_parts.append(
+                    f"HR (sketch, cross-check only): {e.get('rows', [])!s}"[:2500]
                 )
         evidence_summary = "\n".join(evidence_parts) if evidence_parts else "No sales evidence retrieved."
 

@@ -6,7 +6,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { InputPanel } from "@/components/decision/InputPanel";
 import { FinalDecision } from "@/components/decision/FinalDecision";
-import { analyzeDecision, AnalysisResult, ChatMessage } from "@/lib/decision-engine";
+import { analyzeDecision, AnalysisResult } from "@/lib/decision-engine";
+import { getChatBubbleClass, getLabelAccentClass } from "@/lib/agentChatStyles";
 
 const Index = () => {
   const navigate = useNavigate();
@@ -71,21 +72,6 @@ const Index = () => {
   };
 
   const shownChat = useMemo(() => chatMessages.slice(0, visibleMessages), [chatMessages, visibleMessages]);
-
-  const bubbleClass = (actor: ChatMessage["actor"]) => {
-    switch (actor) {
-      case "user":
-        return "ml-auto bg-primary text-primary-foreground";
-      case "manager_router":
-        return "mr-auto bg-accent text-accent-foreground";
-      case "agent":
-        return "mr-auto bg-card border border-border";
-      case "manager_tldr":
-        return "mr-auto bg-success/15 border border-success/40";
-      default:
-        return "mr-auto bg-warning/15 border border-warning/40";
-    }
-  };
 
   return (
     <div className="min-h-screen bg-gradient-subtle flex flex-col items-center">
@@ -164,21 +150,36 @@ const Index = () => {
 
                 <div className="rounded-2xl bg-card border border-border p-4 shadow-card">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                    WhatsApp-style agent room
+                    Multi-agent thread
                   </p>
-                  <div className="space-y-3 max-h-[480px] overflow-auto pr-1">
+                  <div className="space-y-3.5 max-h-[min(52vh,520px)] overflow-y-auto pr-1 scroll-smooth">
                     {shownChat.map((msg) => (
-                      <div key={msg.id} className={`max-w-[80%] rounded-2xl px-4 py-3 text-left ${bubbleClass(msg.actor)}`}>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75 mb-1">{msg.label}</p>
-                        <div className="text-sm leading-relaxed prose prose-sm max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:bg-muted prose-pre:text-muted-foreground">
+                      <div
+                        key={msg.id}
+                        className={getChatBubbleClass(msg.actor, msg.label)}
+                      >
+                        <p
+                          className={`text-[11px] font-bold uppercase tracking-wide mb-1.5 ${getLabelAccentClass(msg.label, msg.actor)}`}
+                        >
+                          {msg.label}
+                        </p>
+                        <div
+                          className={
+                            "text-sm leading-relaxed prose prose-sm max-w-none dark:prose-invert " +
+                            "prose-p:leading-relaxed prose-pre:bg-muted/80 prose-pre:text-muted-foreground " +
+                            "prose-headings:text-foreground prose-strong:text-foreground"
+                          }
+                        >
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
                         </div>
                       </div>
                     ))}
                     {isAnalyzing && (
-                      <div className="mr-auto max-w-[40%] rounded-2xl px-4 py-3 bg-card border border-border">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75 mb-1">System</p>
-                        <p className="text-sm">Typing...</p>
+                      <div className="mr-auto max-w-[40%] rounded-2xl px-4 py-3 border-l-4 border-l-muted-foreground/40 bg-muted/40 border border-border/60">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+                          System
+                        </p>
+                        <p className="text-sm text-muted-foreground">Typing…</p>
                       </div>
                     )}
                   </div>

@@ -1,13 +1,14 @@
 """
 Marketing Agent - Evaluates campaign performance and market messaging impact.
-Uses LangChain with Tavily (web search) and NewsData.io (news) for real-time market intelligence.
+Uses LangChain: Supabase (company tables) + Tavily (web) + NewsData (news).
 """
 import logging
 import os
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 from .base_agent import BaseAgent, AgentInsight
 from services.marketing_tools import TavilySearchTool, NewsDataTool
+from services.supabase_agent_tools import build_marketing_supabase_tools
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -15,34 +16,45 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 logger = logging.getLogger(__name__)
 
 class MarketingAgent(BaseAgent):
-    def __init__(self, db_service, llm=None):
+    def __init__(self, db_service, llm=None, company_db: Optional[Any] = None):
+        """
+        db_service: LocalKnowledgeService (or compatible) for file-based context.
+        company_db: optional DatabaseService (Supabase) for marketing_record and shallow cross-table reads.
+        """
         super().__init__(db_service, llm)
-        self.tools = [TavilySearchTool(), NewsDataTool()]
-        
+        self._company_db = company_db
+        self.tools: List[Any] = []
+        supabase_tools = build_marketing_supabase_tools(company_db)
+        if supabase_tools:
+            self.tools.extend(supabase_tools)
+            logger.info("MarketingAgent: %d Supabase read tool(s) enabled", len(supabase_tools))
+        self.tools.extend([TavilySearchTool(), NewsDataTool()])
+
         # Initialize LangChain LLM
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise ValueError("GOOGLE_API_KEY not found in environment variables. Please check your .env file.")
-            
+
         self.lc_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash-lite",
             google_api_key=api_key,
             temperature=0.3
         )
-        
+
         # Setup Agent
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a proactive Marketing Performance Analyst. "
-                       "Your goal is to provide actionable intelligence even with limited internal data. \n\n"
-                       "1. ALWAYS review the 'Internal Context' provided in the input. \n"
-                       "2. If the user query refers to a plan (like 'Q3 Expansion') not fully detailed in the docs, "
-                       "analyze the EXISTING marketing reports and use your SEARCH TOOLS to benchmark "
-                       "competitors and trends related to those specific campaigns (e.g., search for TikTok marketing ROI or competitor sentiment). \n"
-                       "3. Do not just say 'I need more info'. Synthesize a perspective based on what you HAVE and what you FIND online."),
+             "You have read-only access to the company's Supabase/PostgreSQL data when company_db is enabled.\n"
+             "1) For performance, spend, channel, campaign, ROI, or internal metrics — call read_marketing_database FIRST "
+             "(table marketing_record). For light org/finance/sales context, use read_supporting_company_data with a valid scope. "
+             "Do NOT deep-dive HR, legal, or supply; use those only for quick cross-checks. Specialist agents own those domains.\n"
+             "2) REVIEW the 'Internal Context' in the user message (file-based KB and uploads).\n"
+             "3) Use tavily_search and newsdata_search for external benchmarks, competitors, and news — after or alongside internal data.\n"
+             "4) Synthesize: do not refuse with 'no data' if you can combine internal rows + search results."),
             ("human", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
-        
+
         agent = create_tool_calling_agent(self.lc_llm, self.tools, prompt)
         self.agent_executor = AgentExecutor(agent=agent, tools=self.tools, verbose=True, handle_parsing_errors=True)
 

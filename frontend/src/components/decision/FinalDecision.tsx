@@ -7,52 +7,62 @@ interface Props {
   decision: Decision;
 }
 
+const riskPill = {
+  Low: "text-success border-success/40 bg-success/10",
+  Medium: "text-warning border-warning/40 bg-warning/10",
+  High: "text-destructive border-destructive/40 bg-destructive/10",
+} as const;
+
 export const FinalDecision = ({ decision }: Props) => {
-  const riskColor = {
-    Low: "text-success bg-success/10 border-success/20",
-    Medium: "text-warning bg-warning/10 border-warning/20",
-    High: "text-destructive bg-destructive/10 border-destructive/20",
-  }[decision.risk];
+  const riskKey = (["Low", "Medium", "High"] as const).includes(decision.risk as "Low" | "Medium" | "High")
+    ? (decision.risk as keyof typeof riskPill)
+    : "Medium";
+  const riskColor = riskPill[riskKey];
 
   return (
-    <section className="relative rounded-2xl bg-gradient-decision text-primary-foreground p-8 shadow-elevated animate-scale-in overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_hsl(var(--primary-glow)/0.4),_transparent_60%)]" />
+    <section className="relative rounded-xl bg-gradient-decision text-primary-foreground p-3.5 sm:p-4 shadow-elevated animate-scale-in overflow-hidden max-h-[min(70vh,540px)] flex flex-col">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_hsl(var(--primary-glow)/0.3),_transparent_50%)]" />
 
-      <div className="relative">
-        <div className="flex items-center gap-2 mb-3">
-          <CheckCircle2 className="w-5 h-5" />
-          <span className="text-xs font-bold uppercase tracking-widest opacity-90">
-            Final Decision
-          </span>
+      <div className="relative min-h-0 flex flex-col gap-2">
+        <div className="flex items-center gap-1.5 flex-shrink-0 text-[10px] font-bold uppercase tracking-wider opacity-85">
+          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+          <span>Final decision</span>
         </div>
 
-        <h2 className="text-4xl md:text-5xl font-bold mb-4 leading-tight">
+        <p
+          className="text-sm sm:text-base font-semibold leading-snug flex-shrink-0 max-w-4xl line-clamp-3"
+          title={decision.verdict}
+        >
           {decision.verdict}
-        </h2>
+        </p>
 
-        <div className="prose dark:prose-invert max-w-2xl text-primary-foreground/90 mb-6 leading-relaxed">
+        <div className="prose prose-sm dark:prose-invert max-w-3xl text-primary-foreground/90 leading-normal min-h-0 max-h-[30vh] sm:max-h-[28vh] overflow-y-auto pr-0.5 text-[13px] [&_p]:my-1.5">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{decision.reasoning}</ReactMarkdown>
         </div>
 
-        <div className="grid sm:grid-cols-2 gap-3">
-          <div className={`rounded-xl border bg-background/95 p-4 ${riskColor.replace("text-", "").split(" ")[0]}`}>
-            <div className="flex items-center gap-2 text-foreground/70 text-xs font-semibold uppercase tracking-wide mb-2">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              Risk Level
+        <div className="grid grid-cols-2 gap-2 flex-shrink-0 pt-0.5">
+          <div className="rounded-lg border border-border/20 bg-background/90 backdrop-blur-sm p-2.5">
+            <div className="flex items-center gap-1.5 text-foreground/70 text-[10px] font-semibold uppercase tracking-wide mb-1">
+              <AlertTriangle className="w-3 h-3" />
+              Risk
             </div>
-            <div className={`inline-flex items-center px-3 py-1 rounded-full border text-sm font-bold ${riskColor}`}>
+            <div
+              className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] font-bold text-foreground ${riskColor}`}
+            >
               {decision.risk}
             </div>
           </div>
 
-          <div className="rounded-xl bg-background/95 p-4">
-            <div className="flex items-center gap-2 text-foreground/70 text-xs font-semibold uppercase tracking-wide mb-2">
-              <Gauge className="w-3.5 h-3.5" />
+          <div className="rounded-lg border border-border/20 bg-background/90 backdrop-blur-sm p-2.5">
+            <div className="flex items-center gap-1.5 text-foreground/70 text-[10px] font-semibold uppercase tracking-wide mb-1">
+              <Gauge className="w-3 h-3" />
               Confidence
             </div>
-            <div className="flex items-center gap-3">
-              <span className="text-2xl font-bold text-foreground">{decision.confidence}%</span>
-              <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-foreground tabular-nums">
+                {decision.confidence}%
+              </span>
+              <div className="flex-1 h-1 bg-secondary rounded-full overflow-hidden min-w-0">
                 <div
                   className="h-full bg-gradient-primary rounded-full transition-all duration-1000"
                   style={{ width: `${decision.confidence}%` }}

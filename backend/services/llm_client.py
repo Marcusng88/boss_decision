@@ -1,12 +1,54 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import random
+import threading
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+# Serialize async Gemini calls so sub-agents + manager don't burst and trip RPM limits
+_thread_init = threading.Lock()
+_async_llm_lock: Optional[asyncio.Lock] = None
+
+
+def _get_async_llm_lock() -> asyncio.Lock:
+    global _async_llm_lock
+    with _thread_init:
+        if _async_llm_lock is None:
+            _async_llm_lock = asyncio.Lock()
+    return _async_llm_lock
+
+
+def _max_429_attempts() -> int:
+    return max(1, int(os.getenv("LLM_429_MAX_RETRIES", "8")))
+
+
+def _between_calls_sec() -> float:
+    """Optional tiny pause after a successful call (stagger, same lock is main guard)."""
+    return max(0.0, float(os.getenv("LLM_BETWEEN_CALLS_SEC", "0.15")))
+
+
+def _backoff_seconds(attempt: int, resp: Optional[httpx.Response] = None) -> float:
+    """Exponential backoff with jitter. Honor Retry-After when present."""
+    if resp is not None and resp.status_code == 429:
+        ra = resp.headers.get("retry-after")
+        if ra:
+            try:
+                return min(120.0, float(ra) + random.uniform(0, 0.5))
+            except ValueError:
+                pass
+    cap = max(8.0, float(os.getenv("LLM_429_MAX_BACKOFF_SEC", "60")))
+    base = 4.0 * (1.6**attempt)
+    wait = min(cap, base + random.uniform(0, 1.0))
+    return max(3.0, wait)
 
 
 def _strip_json_fence(text: str) -> str:
@@ -104,33 +146,62 @@ class UnifiedLLMClient:
         temperature: float = 0.3,
         max_tokens: int = 600,
     ) -> LLMResponse:
-
         url = self._endpoint()
         headers = self._headers()
         payload = self._payload(system_prompt, user_prompt, temperature, max_tokens)
+        max_attempts = _max_429_attempts()
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            for attempt in range(3):
-                try:
-                    resp = await client.post(url, headers=headers, json=payload)
-                    
-                    if resp.status_code == 429:
-                        wait_time = (attempt + 1) * 2
-                        print(f"[LLM] Rate limited (429). Retrying in {wait_time}s...")
-                        await asyncio.sleep(wait_time)
-                        continue
-                        
-                    resp.raise_for_status()
-                    data = resp.json()
-                    text = self._extract_text(data)
-                    return LLMResponse(text=text, model=self.model)
+        # One in-flight request at a time to avoid self-inflicted 429s from parallel agents
+        async with _get_async_llm_lock():
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                last_429_response: Optional[httpx.Response] = None
+                for attempt in range(max_attempts):
+                    try:
+                        resp = await client.post(url, headers=headers, json=payload)
+                        if resp.status_code == 429:
+                            last_429_response = resp
+                            wait = _backoff_seconds(attempt, resp)
+                            body_hint = (resp.text or "")[:200]
+                            logger.warning(
+                                "[LLM] Rate limited (429), attempt %s/%s. Waiting %.1fs. Hint: %s",
+                                attempt + 1,
+                                max_attempts,
+                                wait,
+                                body_hint,
+                            )
+                            await asyncio.sleep(wait)
+                            continue
+                        resp.raise_for_status()
+                        data = resp.json()
+                        text = self._extract_text(data)
+                        await asyncio.sleep(_between_calls_sec())
+                        return LLMResponse(text=text, model=self.model)
+                    except httpx.HTTPStatusError as e:
+                        if e.response is not None and e.response.status_code == 429:
+                            last_429_response = e.response
+                            wait = _backoff_seconds(attempt, e.response)
+                            logger.warning(
+                                "[LLM] HTTP 429, attempt %s/%s, waiting %.1fs",
+                                attempt + 1,
+                                max_attempts,
+                                wait,
+                            )
+                            await asyncio.sleep(wait)
+                            continue
+                        raise
+                    except (httpx.RequestError, json.JSONDecodeError) as e:
+                        if attempt >= max_attempts - 1:
+                            raise Exception(
+                                f"LLM request failed after {max_attempts} attempts: {url} | {e!s}"
+                            ) from e
+                        await asyncio.sleep(1.0 + attempt)
 
-                except Exception as e:
-                    if attempt == 2:
-                        raise Exception(f"LLM request failed after 3 attempts: {url} | {str(e)}")
-                    await asyncio.sleep(1)
-        
-        raise Exception("LLM request failed due to unknown error.")
+                hint = (last_429_response.text or "")[:300] if last_429_response else "n/a"
+                raise Exception(
+                    "LLM: exhausted retries after HTTP 429 (rate limit). "
+                    "Wait a few minutes, reduce how many sub-agents are routed at once, enable billing/quota in Google AI Studio, "
+                    f"or increase LLM_429_MAX_RETRIES / LLM_429_MAX_BACKOFF_SEC. Last response hint: {hint!r}"
+                )
 
     def complete_text(
         self,
@@ -144,18 +215,25 @@ class UnifiedLLMClient:
         headers = self._headers()
         payload = self._payload(system_prompt, user_prompt, temperature, max_tokens)
 
-        with httpx.Client(timeout=60.0) as client:
-            try:
+        with httpx.Client(timeout=120.0) as client:
+            last: Optional[httpx.Response] = None
+            for attempt in range(_max_429_attempts()):
                 resp = client.post(url, headers=headers, json=payload)
+                if resp.status_code == 429:
+                    last = resp
+                    wait = _backoff_seconds(attempt, resp)
+                    logger.warning("[LLM sync] 429, sleeping %.1fs (attempt %s)", wait, attempt + 1)
+                    time.sleep(wait)
+                    continue
                 resp.raise_for_status()
-
                 data = resp.json()
                 text = self._extract_text(data)
-
+                time.sleep(_between_calls_sec())
                 return LLMResponse(text=text, model=self.model)
-
-            except Exception as e:
-                raise Exception(f"LLM request failed: {url} | {str(e)}")
+        raise Exception(
+            "LLM (sync): rate limited (429) after all retries. "
+            "Back off and retry, or check Gemini quota in Google Cloud / AI Studio."
+        )
 
     async def acomplete_json(
         self,
