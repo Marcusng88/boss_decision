@@ -8,7 +8,7 @@ import { AgentInsights } from "@/components/decision/AgentInsights";
 import { SubagentViews } from "@/components/decision/SubagentViews";
 import { FinalDecision } from "@/components/decision/FinalDecision";
 import { SimulationLauncherCard } from "@/components/simulator/SimulationLauncherCard";
-import { analyze, AnalysisResult } from "@/lib/decision-engine";
+import { analyzeDecision, AnalysisResult } from "@/lib/decision-engine";
 
 type Stage = "idle" | "data" | "agents" | "subagents" | "decision";
 
@@ -31,9 +31,9 @@ const Index = () => {
     return "pending";
   };
 
-  const handleAnalyze = (query: string) => {
+  const handleAnalyze = async (query: string) => {
     setActiveQuery(query);
-    const r = analyze(query);
+    const r = await analyzeDecision(query, { allowMockFallback: true });
     setResult(r);
     setStage("data");
     setTimeout(() => setStage("agents"), 1100);

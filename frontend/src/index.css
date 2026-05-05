@@ -310,4 +310,14 @@ All colors MUST be HSL.
   .sim-scroll::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.4);
   }
+
+  .sim-page-bg {
+    background-image: var(--gradient-subtle);
+  }
+
+  .sim-grid-overlay {
+    background-image: linear-gradient(to right, hsl(var(--foreground) / 0.1) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--foreground) / 0.1) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
 }
