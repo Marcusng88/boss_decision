@@ -1,9 +1,15 @@
 """
 Supabase database client and helper functions.
 """
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional
+
 from supabase import create_client, Client
 from functools import lru_cache
 from config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache()
@@ -140,3 +146,230 @@ class DatabaseService:
             .execute()
         
         return response.data[0]
+
+    # ------------------------------------------------------------------
+    # Read-only agent helpers (PostgREST, marketing / sales + shallow cross)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _to_thread(func):
+        return await asyncio.to_thread(func)
+
+    async def fetch_marketing_records(
+        self,
+        *,
+        limit: int = 40,
+        period: Optional[str] = None,
+        campaign_name_contains: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Primary marketing domain: marketing_record (campaigns, channels, metrics)."""
+        cap = min(max(1, limit), 100)
+
+        def _run():
+            q = self.client.table("marketing_record").select("*")
+            if period:
+                q = q.eq("period", period)
+            if campaign_name_contains:
+                q = q.ilike("campaign_name", f"%{campaign_name_contains}%")
+            return q.order("created_at", desc=True).limit(cap).execute()
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_sales_records_for_agent(
+        self,
+        *,
+        limit: int = 50,
+        period: Optional[str] = None,
+        employee_id: Optional[int] = None,
+        deal_stage: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Primary sales domain: sales_record; pass employee_id to narrow to one rep when relevant."""
+        cap = min(max(1, limit), 150)
+
+        def _run():
+            q = self.client.table("sales_record").select("*")
+            if period:
+                q = q.eq("period", period)
+            if employee_id is not None:
+                q = q.eq("employee_id", employee_id)
+            if deal_stage:
+                q = q.eq("deal_stage", deal_stage)
+            return q.order("created_at", desc=True).limit(cap).execute()
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_employees_limited(self, limit: int = 80) -> List[Dict[str, Any]]:
+        cap = min(max(1, limit), 200)
+
+        def _run():
+            return (
+                self.client.table("employee")
+                .select("employee_id,dept_id,name,role,email,hire_date,exit_date")
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_departments_all(self) -> List[Dict[str, Any]]:
+        def _run():
+            return self.client.table("department").select("*").execute()
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_finance_limited(
+        self, *, limit: int = 40, dept_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        cap = min(max(1, limit), 100)
+
+        def _run():
+            q = self.client.table("finance_record").select("*")
+            if dept_id is not None:
+                q = q.eq("dept_id", dept_id)
+            return q.order("period", desc=True).limit(cap).execute()
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_source_documents_limited(self, limit: int = 25) -> List[Dict[str, Any]]:
+        cap = min(max(1, limit), 80)
+
+        def _run():
+            return (
+                self.client.table("source_document")
+                .select(
+                    "source_id,doc_type,title,published_date,extracted_at,notes,created_at"
+                )
+                .order("created_at", desc=True)
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_hr_shallow_for_employee(
+        self, employee_id: int, limit: int = 12
+    ) -> List[Dict[str, Any]]:
+        """Light read on hr_record; use for cross-checks only, not full HR review."""
+        cap = min(max(1, limit), 50)
+
+        def _run():
+            return (
+                self.client.table("hr_record")
+                .select("*")
+                .eq("employee_id", employee_id)
+                .order("period", desc=True)
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_supply_limited(self, limit: int = 12) -> List[Dict[str, Any]]:
+        cap = min(max(1, limit), 50)
+
+        def _run():
+            return (
+                self.client.table("supply_record")
+                .select("*")
+                .order("period", desc=True)
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_legal_policies_limited(self, limit: int = 12) -> List[Dict[str, Any]]:
+        cap = min(max(1, limit), 50)
+
+        def _run():
+            return (
+                self.client.table("legal_policy")
+                .select("legal_id,policy_category,policy_name,region,effective_date,rule_text")
+                .order("created_at", desc=True)
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_legal_cases_limited(self, limit: int = 8) -> List[Dict[str, Any]]:
+        cap = min(max(1, limit), 30)
+
+        def _run():
+            return (
+                self.client.table("legal_cases")
+                .select("case_id,employee_id,issue_type,description,created_at")
+                .order("created_at", desc=True)
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_decision_case_recent(self, limit: int = 6) -> List[Dict[str, Any]]:
+        cap = min(max(1, limit), 20)
+
+        def _run():
+            return (
+                self.client.table("decision_case")
+                .select("case_id,question,context,status,created_at,submitted_by")
+                .order("created_at", desc=True)
+                .limit(cap)
+                .execute()
+            )
+
+        res = await self._to_thread(_run)
+        return res.data or []
+
+    async def fetch_supporting_by_scope(
+        self,
+        scope: str,
+        *,
+        limit: int = 20,
+        employee_id: Optional[int] = None,
+        dept_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Whitelist-driven shallow reads for marketing/sales tools.
+        Scopes: employees, departments, finance, source_documents, hr_sketch, supply_sketch,
+        legal_policy, legal_cases, sales_sketch, decision_cases
+        """
+        s = (scope or "").strip().lower().replace("-", "_")
+        try:
+            if s in ("employees", "employee"):
+                return await self.fetch_employees_limited(limit=limit)
+            if s in ("departments", "department"):
+                return await self.fetch_departments_all()
+            if s == "finance":
+                return await self.fetch_finance_limited(limit=limit, dept_id=dept_id)
+            if s in ("source_documents", "documents", "source_document"):
+                return await self.fetch_source_documents_limited(limit=limit)
+            if s in ("hr_sketch", "hr_light", "hr"):
+                if employee_id is None:
+                    return []
+                return await self.fetch_hr_shallow_for_employee(employee_id, limit=limit)
+            if s in ("supply_sketch", "supply", "supply_chain"):
+                return await self.fetch_supply_limited(limit=limit)
+            if s in ("legal_policy", "legal_policies", "legal"):
+                return await self.fetch_legal_policies_limited(limit=limit)
+            if s in ("legal_cases", "legal_case"):
+                return await self.fetch_legal_cases_limited(limit=limit)
+            if s in ("sales_sketch", "sales_pipeline", "sales_light"):
+                return await self.fetch_sales_records_for_agent(
+                    limit=limit, employee_id=employee_id, period=None
+                )
+            if s in ("decision_cases", "decisions", "recent_decision_cases"):
+                return await self.fetch_decision_case_recent(limit=limit)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("fetch_supporting_by_scope failed scope=%s: %s", s, exc)
+        return []

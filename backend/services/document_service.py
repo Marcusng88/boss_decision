@@ -1,4 +1,4 @@
-import time
+﻿import time
 import json
 import argparse
 from pathlib import Path
@@ -174,31 +174,31 @@ STRICTLY classify into ONE of these 9 types:
 
 === CLASSIFICATION RULES (STRICT) ===
 
-PAYSLIP / SALARY SLIP → document_type: "Employee", department: "HR"
+PAYSLIP / SALARY SLIP ΓåÆ document_type: "Employee", department: "HR"
    - Even if contains financial data, it's still document_type "Employee"
    - Payslips are NEVER "Finance Report"
 
-PERFORMANCE REVIEW → document_type: "HR Report", department: "HR"
+PERFORMANCE REVIEW ΓåÆ document_type: "HR Report", department: "HR"
 
-SALES DEAL/REVENUE → document_type: "Sales Log", department: "Sales"
+SALES DEAL/REVENUE ΓåÆ document_type: "Sales Log", department: "Sales"
 
-BUDGET/INVOICE → document_type: "Finance Report", department: "Finance"
+BUDGET/INVOICE ΓåÆ document_type: "Finance Report", department: "Finance"
 
-CAMPAIGN METRICS → document_type: "Marketing Report", department: "Marketing"
+CAMPAIGN METRICS ΓåÆ document_type: "Marketing Report", department: "Marketing"
 
-INVENTORY → document_type: "Supply Chain Log", department: "Operations"
+INVENTORY ΓåÆ document_type: "Supply Chain Log", department: "Operations"
 
 === EXAMPLES ===
 
 CORRECT:
-- "John Tan Payslip March 2026" → document_type: "Employee", department: "HR"
-- "Salary Slip" → document_type: "Employee", department: "HR"
-- "Q1 Performance Reviews" → document_type: "HR Report", department: "HR"
-- "Monthly Sales Report" → document_type: "Sales Log", department: "Sales"
+- "John Tan Payslip March 2026" ΓåÆ document_type: "Employee", department: "HR"
+- "Salary Slip" ΓåÆ document_type: "Employee", department: "HR"
+- "Q1 Performance Reviews" ΓåÆ document_type: "HR Report", department: "HR"
+- "Monthly Sales Report" ΓåÆ document_type: "Sales Log", department: "Sales"
 
 WRONG:
-- "Payslip" → "Finance Report" (NO! It's "Employee")
-- "Sales Manager Payslip" → "Sales Log" (NO! It's "Employee")
+- "Payslip" ΓåÆ "Finance Report" (NO! It's "Employee")
+- "Sales Manager Payslip" ΓåÆ "Sales Log" (NO! It's "Employee")
 
 === OUTPUT FORMAT (STRICT JSON) ===
 
@@ -361,7 +361,7 @@ Now analyze the provided document and return ONLY valid JSON."""
             
             # If no entities, show warning
             if len(result.get('entities', [])) == 0:
-                print(f"    [DOCUMENT_SERVICE] ⚠️  WARNING: No entities extracted from document!")
+                print(f"    [DOCUMENT_SERVICE] ΓÜá∩╕Å  WARNING: No entities extracted from document!")
                 print(f"    [DOCUMENT_SERVICE]     This will result in NO_SQL_POSSIBLE")
                 print(f"    [DOCUMENT_SERVICE]     Possible reasons:")
                 print(f"    [DOCUMENT_SERVICE]     - Image quality too low to read")

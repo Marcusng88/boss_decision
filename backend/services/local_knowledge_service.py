@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import json
 import re
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 class LocalKnowledgeService:
@@ -54,12 +57,18 @@ class LocalKnowledgeService:
     async def get_employee_hr_records(self, employee_id: int) -> List[Dict[str, Any]]:
         """Load HR-like records from local markdown/json files."""
         records: List[Dict[str, Any]] = []
+        all_files = self._knowledge_files()
+        logger.info(f"Scanning {len(all_files)} files for employee_id: {employee_id}")
 
-        for file_path in self._knowledge_files():
+        for file_path in all_files:
             file_records = self._extract_hr_records(file_path)
+            if file_records:
+                logger.debug(f"Extracted {len(file_records)} potential HR records from {file_path.name}")
+            
             for record in file_records:
                 resolved_id = self._resolve_employee_id(record, file_path)
                 if resolved_id == employee_id:
+                    logger.info(f"MATCH: Found HR record for employee {employee_id} in {file_path.name}")
                     normalized = {
                         "hr_id": record.get("hr_id") or self._stable_record_id(file_path, "hr"),
                         "employee_id": employee_id,
@@ -128,6 +137,13 @@ class LocalKnowledgeService:
                     return results
 
         return results
+
+    def add_document(self, name: str, content: str):
+        """Save a document to the knowledge base."""
+        doc_path = self.documents_dir / f"{name}.txt"
+        doc_path.write_text(content, encoding="utf-8")
+        logger.info(f"Added document to knowledge base: {doc_path}")
+        return doc_path
 
     async def get_case_evidence(self, case_id: str) -> List[Dict[str, Any]]:
         """Read stored evidence links for a decision case."""
@@ -232,9 +248,9 @@ class LocalKnowledgeService:
         return payload
 
     def _knowledge_files(self) -> List[Path]:
-        patterns = ("*.md", "*.json")
+        patterns = ("*.md", "*.json", "*.txt")
         files: List[Path] = []
-        for root in [self.entities_dir, self.relationship_dir, self.raw_dir]:
+        for root in [self.entities_dir, self.relationship_dir, self.raw_dir, self.documents_dir]:
             for pattern in patterns:
                 files.extend(sorted(root.glob(pattern)))
         return files
@@ -314,6 +330,11 @@ class LocalKnowledgeService:
         for raw_line in text.splitlines():
             line = raw_line.strip()
             if not line or line.startswith("#"):
+                # Check for headers like "# Employee 102"
+                if line.startswith("#"):
+                    match = re.search(r"employee[_\s-]?(\d+)", line.lower())
+                    if match and "employee_id" not in data:
+                        data["employee_id"] = int(match.group(1))
                 continue
             if ":" not in line:
                 continue
@@ -349,8 +370,16 @@ class LocalKnowledgeService:
 
     def _looks_like_hr_markdown(self, text: str, file_path: Path) -> bool:
         lower = f"{file_path.name}\n{text}".lower()
-        markers = ["performance_score", "pip_status", "warning_count", "hr"]
-        return any(marker in lower for marker in markers)
+        # Markers indicating this file contains HR/Performance data
+        markers = [
+            "performance_score", "pip_status", "warning_count", 
+            "hr_policy", "hr_record", "performance review", 
+            "attendance", "disciplinary"
+        ]
+        is_hr = any(marker in lower for marker in markers)
+        if is_hr:
+            logger.debug(f"File {file_path.name} marked as HR content")
+        return is_hr
 
     def _looks_like_sales_markdown(self, text: str, file_path: Path) -> bool:
         lower = f"{file_path.name}\n{text}".lower()
@@ -362,7 +391,9 @@ class LocalKnowledgeService:
         if candidate is not None:
             return candidate
 
-        match = re.search(r"employee[_-]?(\d+)", file_path.stem.lower())
+        # Try mapping identifiers like "Employee_102" or "employee 102"
+        haystack = f"{file_path.name} {record.get('name', '')}".lower()
+        match = re.search(r"employee[_\s-]?(\d+)", haystack)
         if match:
             return int(match.group(1))
         return None
