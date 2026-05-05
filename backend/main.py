@@ -1,3 +1,4 @@
+from agents.supply_chain_agent import SupplyChainAgent
 """
 Main FastAPI application for AI Boss Decision Engine.
 Multi-agent decision support system with LangChain integration.
@@ -6,17 +7,21 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from pydantic import Field
+from pydantic import BaseModel, Field
 from typing import Any, Optional
 import uvicorn
+import tempfile
+import os
+from datetime import datetime
 
 from config import get_settings
 from db import DatabaseService
+from services.sales_campaign_service import SalesCampaignService
+from services.sales_supply_debate_service import SalesSupplyDebateService
 
 # Initialize settings
 settings = get_settings()
@@ -63,6 +68,13 @@ class SimulatorRequest(BaseModel):
     business_context: Optional[dict[str, Any]] = None
 
 
+class SalesCampaignRequest(BaseModel):
+    """Request model for Tavily-powered sales campaign suggestions."""
+
+    product: str = Field(..., min_length=2, max_length=120)
+    region: Optional[str] = Field(default="Malaysia", max_length=80)
+
+
 class DeepSimulatorRequest(BaseModel):
     """Request model for deep 2D simulator execution."""
 
@@ -101,6 +113,13 @@ class ObserverChatRequest(BaseModel):
     """Request model for post-run observer chat."""
 
     question: str
+
+
+class SalesSupplyDebateRequest(BaseModel):
+    """Request model for sales-vs-supply debate simulator."""
+
+    item_name: Optional[str] = None
+    max_rounds: int = Field(default=4, ge=1, le=10)
 
 
 def _ensure_simulator_import_path() -> None:
@@ -294,6 +313,32 @@ async def analyze_query(request: AnalyzeRequest):
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
+@app.post("/api/sales/campaign-suggestions")
+async def get_sales_campaign_suggestions(request: SalesCampaignRequest):
+    """
+    Suggest campaign/event ideas for the next week based on Tavily news search.
+    """
+    product = request.product.strip()
+    region = (request.region or "Malaysia").strip() or "Malaysia"
+
+    if len(product) < 2:
+        raise HTTPException(status_code=422, detail="Product name must be at least 2 characters")
+
+    if not settings.tavily_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="TAVILY_API_KEY is not configured. Add it to backend/.env first.",
+        )
+
+    service = SalesCampaignService(settings.tavily_api_key)
+
+    try:
+        result = await service.suggest_campaigns(product=product, region=region)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sales suggestion failed: {str(e)}")
+
+
 @app.post("/api/simulator/run")
 async def run_simulator(request: SimulatorRequest):
     """
@@ -366,6 +411,121 @@ async def stream_simulator(request: SimulatorRequest):
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
+
+@app.get("/api/supply-chain/{supply_id}/availability")
+async def get_supply_chain_availability(supply_id: int):
+    """
+    Check a supply record by supply_id and trigger low-inventory notification.
+    """
+    try:
+        agent = SupplyChainAgent(db)
+        insight = await agent.run(
+            query="Check supply availability and restock risk",
+            context={"supply_id": supply_id, "target_type": "supply_record"},
+        )
+
+        if not insight.evidence_used:
+            raise HTTPException(status_code=404, detail=f"Supply record {supply_id} not found")
+
+        record = insight.evidence_used[0]["data"]
+        threshold = SupplyChainAgent.LOW_INVENTORY_THRESHOLD
+        inventory_level = record.get("inventory_level")
+        supplier_name = record.get("supplier_name")
+        item_name = record.get("item_name")
+        unit_cost = record.get("unit_cost")
+
+        is_low_inventory = (
+            isinstance(inventory_level, (int, float)) and inventory_level < threshold
+        )
+
+        notification = {
+            "triggered": is_low_inventory,
+            "message": (
+                f"Restock required for ongoing finish item '{item_name}'. "
+                f"Supplier: {supplier_name}. Unit price: RM {float(unit_cost):,.2f}. "
+                f"Inventory available: {inventory_level} (threshold: {threshold})."
+                if is_low_inventory
+                else "Inventory level is sufficient. Restock notification not triggered."
+            ),
+            "item_name": item_name,
+            "supplier_name": supplier_name,
+            "unit_price_per_unit": float(unit_cost) if unit_cost is not None else None,
+            "inventory_available": inventory_level,
+            "threshold": threshold,
+        }
+
+        return {
+            "supply_id": supply_id,
+            "availability": {
+                "item_name": item_name,
+                "supplier_name": supplier_name,
+                "inventory_available": inventory_level,
+                "unit_price_per_unit": float(unit_cost) if unit_cost is not None else None,
+            },
+            "notification": notification,
+            "agent_insight": insight.model_dump(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supply-chain availability check failed: {str(e)}")
+
+
+@app.get("/api/supply-chain/availability")
+async def get_all_supply_chain_availability():
+    """
+    Retrieve all supply records and evaluate inventory threshold notification.
+    """
+    try:
+        threshold = SupplyChainAgent.LOW_INVENTORY_THRESHOLD
+        records = await db.get_all_supply_records()
+
+        evaluations = []
+        low_inventory_count = 0
+
+        for record in records:
+            inventory_level = record.get("inventory_level")
+            supplier_name = record.get("supplier_name")
+            item_name = record.get("item_name")
+            unit_cost = record.get("unit_cost")
+            supply_id = record.get("supply_id")
+
+            is_low_inventory = (
+                isinstance(inventory_level, (int, float)) and inventory_level < threshold
+            )
+            if is_low_inventory:
+                low_inventory_count += 1
+
+            evaluations.append(
+                {
+                    "supply_id": supply_id,
+                    "item_name": item_name,
+                    "supplier_name": supplier_name,
+                    "inventory_available": inventory_level,
+                    "unit_price_per_unit": float(unit_cost) if unit_cost is not None else None,
+                    "notification": {
+                        "triggered": is_low_inventory,
+                        "message": (
+                            f"Restock required for ongoing finish item '{item_name}'. "
+                            f"Supplier: {supplier_name}. Unit price: RM {float(unit_cost):,.2f}. "
+                            f"Inventory available: {inventory_level} (threshold: {threshold})."
+                            if is_low_inventory
+                            else "Inventory level is sufficient. Restock notification not triggered."
+                        ),
+                        "threshold": threshold,
+                    },
+                }
+            )
+
+        return {
+            "threshold": threshold,
+            "total_records": len(evaluations),
+            "low_inventory_records": low_inventory_count,
+            "records": evaluations,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supply-chain availability list check failed: {str(e)}")
+
 @app.post("/api/deep-simulator/run")
 async def run_deep_simulator(request: DeepSimulatorRequest):
     """
@@ -378,6 +538,8 @@ async def run_deep_simulator(request: DeepSimulatorRequest):
         return {"status": "ok", "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Deep simulator run failed: {str(e)}")
+
+
 
 
 @app.post("/api/deep-simulator/stream")
@@ -411,6 +573,23 @@ async def run_network_simulator(request: NetworkSimulatorRequest):
         return {"status": "ok", "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Network simulator run failed: {str(e)}")
+
+
+@app.post("/api/simulator/sales-supply-debate")
+async def run_sales_supply_debate_simulator(request: SalesSupplyDebateRequest):
+    """
+    Simulate a debate loop between Sales agent (AI-1) and Supply Chain agent (AI-2)
+    based on supply_record.item_name and inventory constraints.
+    """
+    try:
+        service = SalesSupplyDebateService(db)
+        result = await service.run(
+            max_rounds=request.max_rounds,
+            item_name=request.item_name,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sales-supply debate simulation failed: {str(e)}")
 
 
 @app.post("/api/network-simulator/stream")
@@ -505,6 +684,108 @@ async def download_network_simulator_storyline(session_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Storyline download failed: {str(e)}")
+
+
+@app.post("/api/documents/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    doc_type: str = Form(...),
+    submitted_by: str = Form("system")
+):
+    """Upload a document, store metadata, and trigger ingestion."""
+    try:
+        ext = os.path.splitext(file.filename)[1].lower()
+        allowed_extensions = ['.pdf', '.docx', '.txt', '.md']
+        if ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type {ext} not supported. Allowed: {', '.join(allowed_extensions)}"
+            )
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            temp_path = tmp_file.name
+
+        try:
+            from services.cloudinary_service import get_cloudinary_service
+            from services.document_service import DocumentIngestor
+            from services.data_writer_agent import get_data_writer_agent
+
+            cloudinary_service = get_cloudinary_service()
+            upload_result = cloudinary_service.upload_document(temp_path, file.filename)
+            cloudinary_url = upload_result["url"]
+
+            db_result = db.client.table("source_document").insert({
+                "file_path": cloudinary_url,
+                "doc_type": doc_type,
+                "submitted_by": submitted_by,
+                "submitted_at": datetime.now().isoformat(),
+            }).execute()
+            source_id = db_result.data[0]["source_id"]
+
+            ingestor = DocumentIngestor()
+            extracted_records = ingestor.ingest_document(temp_path, doc_type, source_id)
+
+            if extracted_records:
+                data_writer = get_data_writer_agent(db.client)
+                write_results = await data_writer.write_records(extracted_records, source_id)
+            else:
+                write_results = {"message": "No records extracted from document"}
+
+            return {
+                "success": True,
+                "source_id": source_id,
+                "document_url": cloudinary_url,
+                "filename": file.filename,
+                "doc_type": doc_type,
+                "records_extracted": len(extracted_records) if extracted_records else 0,
+                "write_results": write_results
+            }
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload process failed: {str(e)}")
+
+
+@app.get("/api/documents")
+async def list_documents(doc_type: Optional[str] = None, limit: int = 50, offset: int = 0):
+    """List uploaded documents with optional type filter and pagination."""
+    try:
+        query = db.client.table("source_document").select("*").order("created_at", desc=True)
+        if doc_type:
+            query = query.eq("doc_type", doc_type)
+        result = query.range(offset, offset + limit - 1).execute()
+        return {"documents": result.data, "limit": limit, "offset": offset}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
+
+
+@app.get("/api/documents/{source_id}")
+async def get_document(source_id: int):
+    """Get single document by source_id."""
+    try:
+        result = db.client.table("source_document").select("*").eq("source_id", source_id).single().execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"document": result.data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get document: {str(e)}")
+
+
+@app.delete("/api/documents/{source_id}")
+async def delete_document(source_id: int):
+    """Delete a document record by source_id."""
+    try:
+        db.client.table("source_document").delete().eq("source_id", source_id).execute()
+        return {"success": True, "message": f"Document {source_id} deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
 
 # ============================================

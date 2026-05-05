@@ -4,10 +4,10 @@ import { NetworkSimulationSection } from "@/components/simulator/network/Network
 
 const NetworkSimulationLive = () => {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_8%_0%,rgba(233,119,46,0.16),transparent_34%),radial-gradient(circle_at_90%_10%,rgba(27,133,122,0.18),transparent_38%),linear-gradient(180deg,rgba(249,245,236,0.98),rgba(241,235,224,0.98))]">
+    <div className="sim-page-bg relative min-h-screen overflow-hidden">
       <div className="pointer-events-none absolute -left-28 top-24 h-72 w-72 rounded-full bg-accent/15 blur-3xl" />
       <div className="pointer-events-none absolute -right-20 top-12 h-80 w-80 rounded-full bg-primary/20 blur-3xl" />
-      <div className="pointer-events-none absolute inset-0 opacity-10 [background-image:linear-gradient(to_right,rgba(28,28,28,0.2)_1px,transparent_1px),linear-gradient(to_bottom,rgba(28,28,28,0.2)_1px,transparent_1px)] [background-size:40px_40px]" />
+      <div className="sim-grid-overlay pointer-events-none absolute inset-0 opacity-10" />
 
       <header className="sticky top-0 z-20 border-b border-border/80 bg-background/80 backdrop-blur-md">
         <div className="container max-w-[1400px] py-4 flex items-center justify-between">

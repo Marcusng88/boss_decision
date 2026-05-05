@@ -1,114 +1,155 @@
-"""
-HR Agent - Analyzes employee performance, attendance, warnings, PIP status.
-Yihao's responsibility.
-"""
+"""HR Agent — performance, attendance, warnings, PIP status."""
+import json
+import re
 from typing import Dict, List, Any
 from .base_agent import BaseAgent, AgentInsight
+from .llm_client import llm_json
+
+SYSTEM_PROMPT = """You are an HR specialist analyst for an AI business decision engine.
+Analyze the employee profile and HR records provided and return ONLY valid JSON with no extra text:
+{
+  "findings": ["finding1", "finding2", "finding3"],
+  "risks": ["risk1", "risk2"],
+  "recommendation": "single actionable recommendation",
+  "confidence": 0.75,
+  "data_summary": "brief 3-5 word summary e.g. 'Senior engineer, Dept A'",
+  "metric_value": "key metric e.g. '2.1/5 score'",
+  "trend": "up or down or flat"
+}
+Cover: employee name/role/department/tenure (from profile), performance scores, attendance, warning history, PIP status.
+If the query asks for basic employee info, include position, department, hire date, and employment status in findings.
+"""
 
 
 class HRAgent(BaseAgent):
-    """
-    HR domain specialist agent.
-    Focuses on: performance reviews, attendance, warnings, PIP status, termination policies.
-    """
-    
+
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Retrieve HR-related evidence.
-        
-        For employee termination decisions:
-        - Performance reviews (last 2-4 quarters)
-        - Attendance records
-        - Warning history
-        - PIP status
-        """
         evidence = []
-        
-        # If target is an employee, get their HR records
+
+        # Resolve employee_id: direct ID wins, name search is fallback
+        employee_id = None
+
         if context.get('target_type') == 'employee' and context.get('target_id'):
-            employee_id = context['target_id']
-            
-            # Get performance reviews
-            hr_records = await self.db.get_employee_hr_records(employee_id)
-            evidence.extend([
-                {
-                    'source': 'hr_record',
-                    'type': 'performance_review',
-                    'record_id': record['hr_id'],
-                    'data': record
-                }
-                for record in hr_records
-            ])
-        
+            employee_id = int(context['target_id'])
+        elif context.get('target_name'):
+            # Strip "employee #NNN" prefix to get a plain name
+            raw = re.sub(r'employee\s*#?\d*\s*', '', str(context['target_name']),
+                         flags=re.IGNORECASE).strip()
+            if raw and not raw.isdigit():
+                try:
+                    results = await self.db.search_employees_by_name(raw)
+                    if results:
+                        employee_id = results[0].get('employee_id')
+                except Exception:
+                    pass
+
+        if employee_id is None:
+            return evidence
+
+        # Employee profile
+        try:
+            employee = await self.db.get_employee(employee_id)
+            if employee:
+                evidence.append({'source': 'employee', 'type': 'profile', 'data': employee})
+        except Exception:
+            pass
+
+        # HR records — kept outside inner try/except so failures surface (original behaviour)
+        hr_records = await self.db.get_employee_hr_records(employee_id)
+        evidence.extend([
+            {'source': 'hr_record', 'type': 'performance_review',
+             'record_id': r.get('hr_id'), 'data': r}
+            for r in hr_records
+        ])
+
         return evidence
-    
+
     async def analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
-        """
-        Analyze HR evidence and produce insights.
-        
-        TODO (Yihao): Implement LLM-powered analysis
-        - Use LangChain to structure analysis
-        - Generate findings from performance trends
-        - Identify risks (legal, morale, etc.)
-        - Produce recommendation
-        """
-        
-        # Extract HR records
         hr_records = [e['data'] for e in evidence if e['source'] == 'hr_record']
-        
+        employee_profile = next((e['data'] for e in evidence if e['source'] == 'employee'), None)
+
         if not hr_records:
+            if employee_profile:
+                name = (employee_profile.get('name')
+                        or employee_profile.get('full_name')
+                        or 'Unknown')
+                position = employee_profile.get('position') or employee_profile.get('job_title') or 'Unknown position'
+                dept = (employee_profile.get('department', {}) or {}).get('name', '') if isinstance(employee_profile.get('department'), dict) else employee_profile.get('dept_id', '')
+                hire_date = employee_profile.get('hire_date') or employee_profile.get('start_date') or 'Unknown'
+                status = employee_profile.get('employment_status') or employee_profile.get('status') or 'Active'
+                findings = [
+                    f"Employee: {name} — {position}",
+                    f"Department: {dept}" if dept else "Department: Not specified",
+                    f"Hire date: {hire_date} | Status: {status}",
+                    "No performance review records on file",
+                ]
+                return AgentInsight(
+                    agent_name="HR", emoji="👤",
+                    findings=findings,
+                    risks=["Lack of HR records limits performance assessment"],
+                    recommendation="Initiate formal performance tracking before making personnel decisions",
+                    confidence=0.3,
+                    evidence_used=evidence,
+                    data_summary=f"{name}, {position}",
+                )
             return AgentInsight(
-                agent_name="HR",
-                findings=["No HR records found for analysis"],
-                risks=["Cannot assess performance without data"],
-                recommendation="Insufficient data for HR assessment",
+                agent_name="HR", emoji="👤",
+                findings=["Employee not found or no HR records available"],
+                risks=["Cannot assess performance, attendance, or disciplinary history without data"],
+                recommendation="Verify employee ID and gather HR records before proceeding",
                 confidence=0.0,
-                evidence_used=[]
             )
-        
-        # Basic rule-based analysis (TODO: Replace with LLM)
-        findings = []
-        risks = []
-        
-        # Analyze performance trend
-        recent_scores = [r['performance_score'] for r in hr_records[:3] if r.get('performance_score')]
-        if recent_scores:
-            avg_score = sum(recent_scores) / len(recent_scores)
-            findings.append(f"Average performance score (last 3 reviews): {avg_score:.1f}/5.0")
-            
-            if avg_score < 2.5:
-                findings.append("Performance consistently below expectations (< 2.5/5)")
+
+        profile_str = json.dumps(employee_profile, default=str, indent=2) if employee_profile else "Not available"
+        data_str = json.dumps(hr_records, default=str, indent=2)
+        user_msg = f"Query: {query}\n\nEmployee Profile:\n{profile_str}\n\nHR Records:\n{data_str}"
+
+        try:
+            result = await llm_json(SYSTEM_PROMPT, user_msg)
+            return AgentInsight(
+                agent_name="HR", emoji="👤",
+                findings=result.get("findings", []),
+                risks=result.get("risks", []),
+                recommendation=result.get("recommendation", "See findings above"),
+                confidence=float(result.get("confidence", 0.7)),
+                evidence_used=evidence,
+                data_summary=result.get("data_summary", "HR performance data"),
+                metric_value=result.get("metric_value", ""),
+                trend=result.get("trend", "flat"),
+            )
+        except Exception as e:
+            return self._rule_based(hr_records, evidence, str(e))
+
+    def _rule_based(self, hr_records, evidence, error_note="") -> AgentInsight:
+        findings, risks = [], []
+        scores = [r['performance_score'] for r in hr_records[:3] if r.get('performance_score')]
+        if scores:
+            avg = sum(scores) / len(scores)
+            findings.append(f"Average performance score: {avg:.1f}/5.0")
+            if avg < 2.5:
+                findings.append("Performance consistently below 2.5/5 threshold")
                 risks.append("Sustained underperformance documented")
-        
-        # Check warnings
-        total_warnings = sum(r.get('warning_count', 0) for r in hr_records)
-        if total_warnings > 0:
-            findings.append(f"Total warnings issued: {total_warnings}")
-            risks.append("Disciplinary action history on record")
-        
-        # Check PIP status
-        pip_records = [r for r in hr_records if r.get('pip_status')]
-        if pip_records:
-            latest_pip = pip_records[0]['pip_status']
-            findings.append(f"PIP status: {latest_pip}")
-            
-            if latest_pip is None or latest_pip == '':
-                risks.append("PIP not initiated - required before performance termination per policy")
-        
-        # Generate recommendation
-        if recent_scores and sum(recent_scores) / len(recent_scores) < 2.5 and total_warnings >= 2:
-            if not pip_records or pip_records[0]['pip_status'] is None:
-                recommendation = "Initiate mandatory 60-day PIP before considering termination"
-            else:
-                recommendation = "Performance grounds for termination exist if PIP fails"
-        else:
-            recommendation = "Performance issues present but not severe enough for termination consideration"
-        
+        warnings = sum(r.get('warning_count', 0) for r in hr_records)
+        if warnings > 0:
+            findings.append(f"Total warnings issued: {warnings}")
+            risks.append("Disciplinary history on record")
+        pip = next((r.get('pip_status') for r in hr_records if r.get('pip_status')), None)
+        if pip:
+            findings.append(f"PIP status: {pip}")
+        if not pip:
+            risks.append("PIP not yet initiated — required before termination per policy")
+
+        avg_score = sum(scores) / len(scores) if scores else 3.0
+        rec = (
+            "Initiate mandatory 60-day PIP before considering termination"
+            if avg_score < 2.5 else
+            "Performance issues present; monitor closely with structured review"
+        )
+        metric = f"{avg_score:.1f}/5 score" if scores else "N/A"
+        trend = "down" if len(scores) >= 2 and scores[0] < scores[-1] else "flat"
         return AgentInsight(
-            agent_name="HR",
-            findings=findings,
-            risks=risks,
-            recommendation=recommendation,
-            confidence=0.75,
-            evidence_used=evidence
+            agent_name="HR", emoji="👤",
+            findings=findings, risks=risks, recommendation=rec,
+            confidence=0.70, evidence_used=evidence,
+            data_summary="HR performance review", metric_value=metric, trend=trend,
         )
