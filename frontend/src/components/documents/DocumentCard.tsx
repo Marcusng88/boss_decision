@@ -17,6 +17,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
 interface Document {
   source_id: number;
   doc_type: string;
@@ -25,20 +27,42 @@ interface Document {
   published_date: string | null;
   extracted_at: string | null;
   created_at: string;
+  mock_source?: "seed" | "local_upload";
 }
 
 interface DocumentCardProps {
   document: Document;
   onDelete?: () => void;
+  onDeleteLocal?: (sourceId: number) => void;
 }
 
-export const DocumentCard = ({ document, onDelete }: DocumentCardProps) => {
+export const DocumentCard = ({ document, onDelete, onDeleteLocal }: DocumentCardProps) => {
   const { toast } = useToast();
   const [imageError, setImageError] = useState(false);
+  const isSeedMockDocument = document.mock_source === "seed" || (document.source_id >= 900000 && document.source_id < 950000);
+  const isLocalMockDocument = document.mock_source === "local_upload" || document.source_id >= 950000;
+  const isMockDocument = isSeedMockDocument || isLocalMockDocument;
 
   const handleDelete = async () => {
+    if (isSeedMockDocument) {
+      toast({
+        title: "Mock mode",
+        description: "Delete is disabled while backend is unavailable.",
+      });
+      return;
+    }
+
+    if (isLocalMockDocument) {
+      onDeleteLocal?.(document.source_id);
+      toast({
+        title: "Mock document removed",
+        description: "Local mock upload deleted.",
+      });
+      return;
+    }
+
     try {
-      const response = await fetch(`http://localhost:8000/api/documents/${document.source_id}`, {
+      const response = await fetch(`${API_BASE}/api/documents/${document.source_id}`, {
         method: "DELETE",
       });
 
@@ -232,14 +256,19 @@ export const DocumentCard = ({ document, onDelete }: DocumentCardProps) => {
               <AlertDialogHeader>
                 <AlertDialogTitle className="text-gray-800">Delete document?</AlertDialogTitle>
                 <AlertDialogDescription className="text-gray-500 font-light">
-                  This will permanently delete "{document.title}" and all related data.
-                  This action cannot be undone.
+                  {isSeedMockDocument
+                    ? "This is a mock document. Delete is disabled in mock mode."
+                    : isLocalMockDocument
+                    ? `This will remove local mock document "${document.title}".`
+                    : `This will permanently delete "${document.title}" and all related data.
+                  This action cannot be undone.`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel className="rounded-xl border-gray-200/60 hover:bg-gray-50 transition-all duration-200">Cancel</AlertDialogCancel>
                 <AlertDialogAction
                   onClick={handleDelete}
+                  disabled={isSeedMockDocument}
                   className="bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-xl shadow-md shadow-red-500/20 transition-all duration-200"
                 >
                   Delete

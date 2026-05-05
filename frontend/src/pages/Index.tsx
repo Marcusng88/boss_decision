@@ -1,47 +1,11 @@
-import { useState } from "react";
-import { Brain, FileText, Radar, Sparkles } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { ArrowUpRight, Brain, FileText, Radar, Sparkles, TrendingUp, Truck } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { InputPanel } from "@/components/decision/InputPanel";
-import { DataRetrieved } from "@/components/decision/DataRetrieved";
-import { AgentInsights } from "@/components/decision/AgentInsights";
-import { SubagentViews } from "@/components/decision/SubagentViews";
-import { FinalDecision } from "@/components/decision/FinalDecision";
 import { SimulationLauncherCard } from "@/components/simulator/SimulationLauncherCard";
-import { analyzeDecision, AnalysisResult } from "@/lib/decision-engine";
-
-type Stage = "idle" | "data" | "agents" | "subagents" | "decision";
-
-const stageOrder: Stage[] = ["data", "agents", "subagents", "decision"];
 
 const Index = () => {
   const navigate = useNavigate();
-  const [stage, setStage] = useState<Stage>("idle");
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [activeQuery, setActiveQuery] = useState<string>("");
-
-  const isAnalyzing = stage !== "idle" && stage !== "decision";
-
-  const stageStatus = (s: Stage): "pending" | "loading" | "done" => {
-    if (stage === "idle") return "pending";
-    const currentIdx = stageOrder.indexOf(stage);
-    const targetIdx = stageOrder.indexOf(s);
-    if (targetIdx < currentIdx) return "done";
-    if (targetIdx === currentIdx) return stage === "decision" ? "done" : "loading";
-    return "pending";
-  };
-
-  const handleAnalyze = async (query: string) => {
-    setActiveQuery(query);
-    const r = await analyzeDecision(query, { allowMockFallback: true });
-    setResult(r);
-    setStage("data");
-    setTimeout(() => setStage("agents"), 1100);
-    setTimeout(() => setStage("subagents"), 2400);
-    setTimeout(() => setStage("decision"), 3700);
-  };
-
-  const showAny = stage !== "idle" && result;
+  const activeQuery = "";
 
   return (
     <div className="relative min-h-screen overflow-hidden">
@@ -49,7 +13,7 @@ const Index = () => {
       <div className="pointer-events-none absolute -right-20 top-12 h-80 w-80 rounded-full bg-primary/20 blur-3xl" />
 
       <header className="sticky top-0 z-20 border-b border-border/80 bg-background/80 backdrop-blur-md">
-        <div className="container max-w-7xl py-4 flex items-center justify-between">
+        <div className="w-full max-w-[95%] mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="w-11 h-11 rounded-xl bg-gradient-primary flex items-center justify-center shadow-glow">
               <Brain className="w-5 h-5 text-primary-foreground" />
@@ -81,7 +45,7 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="container max-w-7xl py-8">
+      <main className="w-full max-w-[95%] mx-auto px-4 sm:px-6 py-8">
         <section className="relative mb-8 overflow-hidden rounded-[2rem] border border-border bg-card/70 p-6 shadow-card md:p-8">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_0%,hsl(var(--primary)/0.16),transparent_38%),radial-gradient(circle_at_90%_20%,hsl(var(--accent)/0.14),transparent_34%)]" />
           <div className="relative flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
@@ -114,43 +78,49 @@ const Index = () => {
           </div>
         </section>
 
-        <div className="grid lg:grid-cols-[350px_1fr] gap-6">
-          <InputPanel onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} />
-
-          <div className="space-y-5 min-w-0">
-            {!showAny && (
-              <div className="rounded-[1.6rem] border border-dashed border-border bg-card/65 p-12 text-center">
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-primary flex items-center justify-center shadow-glow mb-4">
-                  <Brain className="w-7 h-7 text-primary-foreground" />
-                </div>
-                <h2 className="text-4xl text-foreground mb-2">
-                  Ready to reason
-                </h2>
-                <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                  Enter a strategic question on the left. The engine will pull signals, consult specialist agents,
-                  debate options, and deliver a final recommendation.
-                </p>
+        <section className="mb-8 grid gap-4 md:grid-cols-2">
+          <Link
+            to="/agents/sales"
+            className="group relative overflow-hidden rounded-[1.6rem] border border-border bg-card/80 p-5 shadow-card transition-all duration-300 hover:-translate-y-1 hover:border-primary/40"
+          >
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_90%_5%,hsl(var(--primary)/0.18),transparent_32%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+            <div className="relative">
+              <p className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/80 px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                <TrendingUp className="h-3.5 w-3.5 text-primary" />
+                Sales Agent
+              </p>
+              <h3 className="mt-4 text-2xl leading-tight text-foreground">Revenue command center</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Explore pipeline health, conversion pressure, and deal velocity with a specialist sales lens.
+              </p>
+              <div className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-foreground">
+                Open Sales Agent
+                <ArrowUpRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </div>
-            )}
+            </div>
+          </Link>
 
-            {showAny && (
-              <>
-                <div className="rounded-2xl bg-card/80 border border-border px-5 py-4 shadow-card animate-fade-in-up">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-[0.18em] mb-1">
-                    Query
-                  </p>
-                  <p className="text-base font-medium text-foreground">"{activeQuery}"</p>
-                </div>
-
-                <DataRetrieved status={stageStatus("data")} items={result!.data} />
-                <AgentInsights status={stageStatus("agents")} agents={result!.agents} />
-                <SubagentViews status={stageStatus("subagents")} views={result!.subagents} />
-
-                {stage === "decision" && <FinalDecision decision={result!.decision} />}
-              </>
-            )}
-          </div>
-        </div>
+          <Link
+            to="/agents/supply-chain"
+            className="group relative overflow-hidden rounded-[1.6rem] border border-border bg-card/80 p-5 shadow-card transition-all duration-300 hover:-translate-y-1 hover:border-accent/50"
+          >
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,hsl(var(--accent)/0.18),transparent_34%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+            <div className="relative">
+              <p className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/80 px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                <Truck className="h-3.5 w-3.5 text-accent-foreground" />
+                Supply Chain Agent
+              </p>
+              <h3 className="mt-4 text-2xl leading-tight text-foreground">Operational resilience cockpit</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Review lead-time volatility, supplier risk, and inventory balance before operations decisions.
+              </p>
+              <div className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-foreground">
+                Open Supply Chain Agent
+                <ArrowUpRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              </div>
+            </div>
+          </Link>
+        </section>
 
         <div className="mt-12">
           <SimulationLauncherCard query={activeQuery} />
@@ -161,3 +131,5 @@ const Index = () => {
 };
 
 export default Index;
+
+

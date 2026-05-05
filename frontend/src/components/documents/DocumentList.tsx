@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
-import { FolderOpen, Loader2, ArrowLeft, Folder } from "lucide-react";
+import { FolderOpen, Loader2, ArrowLeft } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DocumentCard } from "./DocumentCard";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const LOCAL_MOCK_UPLOADS_KEY = "documents.mockUploads.v1";
 
 interface Document {
   source_id: number;
@@ -12,7 +15,61 @@ interface Document {
   published_date: string | null;
   extracted_at: string | null;
   created_at: string;
+  mock_source?: "seed" | "local_upload";
 }
+
+const MOCK_DOCUMENTS: Document[] = [
+  {
+    source_id: 900001,
+    doc_type: "HR Report",
+    title: "Q1 Performance Review - Sales Team",
+    file_path: "https://example.com/mock/hr-q1-performance.pdf",
+    published_date: "2026-03-28",
+    extracted_at: "2026-03-28T08:30:00Z",
+    created_at: "2026-03-28T08:00:00Z",
+    mock_source: "seed",
+  },
+  {
+    source_id: 900002,
+    doc_type: "Sales Log",
+    title: "Enterprise Pipeline Snapshot",
+    file_path: "https://example.com/mock/sales-pipeline-apr.docx",
+    published_date: "2026-04-10",
+    extracted_at: "2026-04-10T03:10:00Z",
+    created_at: "2026-04-10T03:00:00Z",
+    mock_source: "seed",
+  },
+  {
+    source_id: 900003,
+    doc_type: "Supply Chain Log",
+    title: "Supplier Lead Time Variance",
+    file_path: "https://example.com/mock/supply-variance.md",
+    published_date: "2026-04-16",
+    extracted_at: "2026-04-16T10:05:00Z",
+    created_at: "2026-04-16T10:00:00Z",
+    mock_source: "seed",
+  },
+  {
+    source_id: 900004,
+    doc_type: "Legal Policy",
+    title: "Termination and PIP Policy 2026",
+    file_path: "https://example.com/mock/legal-pip-policy.pdf",
+    published_date: "2026-01-12",
+    extracted_at: "2026-01-12T09:15:00Z",
+    created_at: "2026-01-12T09:00:00Z",
+    mock_source: "seed",
+  },
+  {
+    source_id: 900005,
+    doc_type: "Finance Report",
+    title: "Severance Cost Impact Model",
+    file_path: "https://example.com/mock/finance-severance-cost.xlsx",
+    published_date: "2026-02-04",
+    extracted_at: "2026-02-04T07:45:00Z",
+    created_at: "2026-02-04T07:30:00Z",
+    mock_source: "seed",
+  },
+];
 
 interface DocumentListProps {
   refreshTrigger?: number;
@@ -22,21 +79,60 @@ export const DocumentList = ({ refreshTrigger }: DocumentListProps) => {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [usingMockData, setUsingMockData] = useState(false);
+  const [localMockUploads, setLocalMockUploads] = useState<Document[]>([]);
+
+  const loadLocalMockUploads = () => {
+    try {
+      const raw = localStorage.getItem(LOCAL_MOCK_UPLOADS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      const safe = Array.isArray(parsed) ? parsed : [];
+      setLocalMockUploads(safe);
+      return safe;
+    } catch (error) {
+      console.error("Failed to load local mock uploads:", error);
+      setLocalMockUploads([]);
+      return [];
+    }
+  };
+
+  const removeLocalMockUpload = (sourceId: number) => {
+    try {
+      const raw = localStorage.getItem(LOCAL_MOCK_UPLOADS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      const safe = Array.isArray(parsed) ? parsed : [];
+      const next = safe.filter((doc: Document) => doc.source_id !== sourceId);
+      localStorage.setItem(LOCAL_MOCK_UPLOADS_KEY, JSON.stringify(next));
+      setLocalMockUploads(next);
+      setDocuments((prev) => prev.filter((doc) => doc.source_id !== sourceId));
+    } catch (error) {
+      console.error("Failed to remove local mock upload:", error);
+    }
+  };
 
   const fetchDocuments = async () => {
     try {
       setLoading(true);
-      const response = await fetch("http://localhost:8000/api/documents");
+      const response = await fetch(`${API_BASE}/api/documents`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch documents: ${response.status}`);
+      }
       const data = await response.json();
-      setDocuments(data.documents || []);
+      const localUploads = loadLocalMockUploads();
+      setDocuments([...(data.documents || []), ...localUploads]);
+      setUsingMockData(false);
     } catch (error) {
       console.error("Failed to fetch documents:", error);
+      const localUploads = loadLocalMockUploads();
+      setDocuments([...localUploads, ...MOCK_DOCUMENTS]);
+      setUsingMockData(true);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    loadLocalMockUploads();
     fetchDocuments();
   }, [refreshTrigger]);
 
@@ -58,6 +154,8 @@ export const DocumentList = ({ refreshTrigger }: DocumentListProps) => {
     { name: "Marketing Report" },
     { name: "Supply Chain Log" },
     { name: "Legal Policy" },
+    { name: "Legal Contract" },
+    { name: "Legal Case" },
     { name: "Employee" },
   ];
 
@@ -97,6 +195,11 @@ export const DocumentList = ({ refreshTrigger }: DocumentListProps) => {
                 : "Browse and manage uploaded documents by category"
               }
             </p>
+            {usingMockData && (
+              <p className="text-xs text-amber-700 font-medium mt-1">
+                Backend unavailable, showing mock documents.
+              </p>
+            )}
           </div>
         </div>
 
@@ -122,7 +225,12 @@ export const DocumentList = ({ refreshTrigger }: DocumentListProps) => {
             ) : (
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {getFilteredDocuments(selectedFolder).map(doc => (
-                  <DocumentCard key={doc.source_id} document={doc} onDelete={fetchDocuments} />
+                  <DocumentCard
+                    key={doc.source_id}
+                    document={doc}
+                    onDelete={fetchDocuments}
+                    onDeleteLocal={removeLocalMockUpload}
+                  />
                 ))}
               </div>
             )}

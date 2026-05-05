@@ -5,6 +5,22 @@ import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const LOCAL_MOCK_UPLOADS_KEY = "documents.mockUploads.v1";
+
+const DOC_TYPES = [
+  "HR Report",
+  "Sales Log",
+  "Finance Report",
+  "Marketing Report",
+  "Supply Chain Log",
+  "Legal Policy",
+  "Legal Contract",
+  "Legal Case",
+  "Employee",
+];
 
 interface DocumentUploadProps {
   onUploadSuccess?: () => void;
@@ -17,7 +33,33 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
   const [currentStage, setCurrentStage] = useState<string>("Uploading...");
   const [customExtraction, setCustomExtraction] = useState("");
+  const [docType, setDocType] = useState<string>("HR Report");
   const { toast } = useToast();
+
+  const saveMockUpload = (file: File) => {
+    const now = new Date().toISOString();
+    const ext = file.name.includes(".") ? file.name.split(".").pop()?.toLowerCase() : "file";
+    const safeExt = ext || "file";
+    const mockRecord = {
+      source_id: Date.now(),
+      doc_type: docType,
+      title: file.name,
+      file_path: `https://example.com/mock/local-upload-${Date.now()}.${safeExt}`,
+      published_date: null,
+      extracted_at: now,
+      created_at: now,
+      mock_source: "local_upload",
+    };
+
+    try {
+      const raw = localStorage.getItem(LOCAL_MOCK_UPLOADS_KEY);
+      const existing = raw ? JSON.parse(raw) : [];
+      const next = Array.isArray(existing) ? [mockRecord, ...existing] : [mockRecord];
+      localStorage.setItem(LOCAL_MOCK_UPLOADS_KEY, JSON.stringify(next));
+    } catch (storageError) {
+      console.error("Failed to persist mock upload:", storageError);
+    }
+  };
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -58,6 +100,8 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("doc_type", docType);
+      formData.append("submitted_by", "frontend");
       
       // Add custom extraction if provided
       if (customExtraction.trim()) {
@@ -68,7 +112,7 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 240000);
 
-      const response = await fetch("http://localhost:8000/api/documents/upload", {
+      const response = await fetch(`${API_BASE}/api/documents/upload`, {
         method: "POST",
         body: formData,
         signal: controller.signal,
@@ -96,6 +140,7 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
           setUploadStatus("idle");
           setCurrentStage("Uploading...");
           setCustomExtraction(""); // Clear custom extraction field
+          setDocType("HR Report");
         }, 3000);
       } else {
         clearInterval(progressInterval);
@@ -103,29 +148,25 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
       }
     } catch (error) {
       clearInterval(progressInterval);
-      setUploadStatus("error");
-      
-      // Handle timeout specifically
-      if (error instanceof Error && error.name === 'AbortError') {
-        toast({
-          title: "Processing timeout",
-          description: "Document processing took longer than expected. Please try again or upload a smaller file.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Upload failed",
-          description: error instanceof Error ? error.message : "An error occurred during upload",
-          variant: "destructive",
-        });
-      }
-      
-      setCurrentStage("Failed");
+
+      saveMockUpload(file);
+      setUploadStatus("success");
+      setProgress(100);
+      setCurrentStage("Saved in mock mode");
+      onUploadSuccess?.();
+
+      toast({
+        title: "Backend unavailable",
+        description: `${file.name} saved as local mock document for demo mode.`,
+      });
+
       setTimeout(() => {
         setUploading(false);
         setProgress(0);
         setUploadStatus("idle");
         setCurrentStage("Uploading...");
+        setCustomExtraction("");
+        setDocType("HR Report");
       }, 3000);
     }
   };
@@ -164,6 +205,25 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
 
         {/* Custom Extraction Field */}
         <div className="space-y-2 mb-5">
+          <Label htmlFor="doc-type" className="text-sm font-medium text-gray-700">
+            Document category
+          </Label>
+          <Select value={docType} onValueChange={setDocType} disabled={uploading}>
+            <SelectTrigger id="doc-type" className="border-gray-200/50 bg-white/80 focus:border-orange-300 focus:ring-orange-300/30 rounded-xl">
+              <SelectValue placeholder="Select document category" />
+            </SelectTrigger>
+            <SelectContent>
+              {DOC_TYPES.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {type}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Custom Extraction Field */}
+        <div className="space-y-2 mb-5">
           <Label htmlFor="custom-extraction" className="flex items-center gap-2 text-sm font-medium text-gray-700">
             <Sparkles className="w-4 h-4 text-orange-500" />
             What specific data do you want to extract? (Optional)
@@ -198,7 +258,7 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
             id="file-upload"
             className="hidden"
             onChange={handleFileSelect}
-            accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.xlsx,.csv"
+            accept=".pdf,.docx,.txt,.md"
             disabled={uploading}
           />
 
@@ -214,7 +274,7 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
                 or click to browse
               </p>
               <p className="text-xs text-gray-400 mt-2 font-light">
-                PDF, Word, Excel, Images
+                PDF, DOCX, TXT, MD
               </p>
             </label>
           )}
