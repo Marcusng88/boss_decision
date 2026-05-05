@@ -54,7 +54,7 @@ class DatabaseService:
     
     async def get_legal_policies(self, category: str = None):
         """Get legal policies, optionally filtered by category."""
-        query = self.client.table('legal_record').select('*')
+        query = self.client.table('legal_policy').select('*')
         
         if category:
             query = query.eq('policy_category', category)

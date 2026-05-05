@@ -4,6 +4,11 @@ Loads environment variables and provides settings.
 """
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from dotenv import load_dotenv
+from typing import Optional
+import os
+
+load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -20,20 +25,29 @@ class Settings(BaseSettings):
     supabase_service_key: str
     
     # Database Configuration (direct PostgreSQL if needed)
-    database_url: str | None = None
+    database_url: Optional[str] = None
     
     # LLM Configuration
-    openai_api_key: str | None = None
-    llm_model: str = "gpt-4"
+    google_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    llm_model: str = "gemini-2.5-flash-lite"
     llm_temperature: float = 0.7
     
     # LangChain Configuration
     langchain_tracing: bool = False
-    langchain_api_key: str | None = None
+    langchain_api_key: Optional[str] = None
     
     # Vector Store Configuration
     vector_store_type: str = "chroma"  # "chroma" or "faiss"
     chroma_persist_directory: str = "./data/chroma"
+    
+    # Cloudinary Configuration
+    cloudinary_url: Optional[str] = None
+    
+    # Zhipu AI Configuration
+    zhipu_api_key: Optional[str] = None
+    zhipu_base_url: str = "https://api.ilmu.ai/v1"
+    zhipu_model: str = "nemo-super"
     
     class Config:
         env_file = ".env"

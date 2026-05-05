@@ -6,7 +6,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
@@ -14,6 +14,9 @@ from pydantic import BaseModel
 from pydantic import Field
 from typing import Any, Optional
 import uvicorn
+import tempfile
+import os
+from datetime import datetime
 
 from config import get_settings
 from db import DatabaseService
@@ -505,6 +508,108 @@ async def download_network_simulator_storyline(session_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Storyline download failed: {str(e)}")
+
+
+@app.post("/api/documents/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    doc_type: str = Form(...),
+    submitted_by: str = Form("system")
+):
+    """Upload a document, store metadata, and trigger ingestion."""
+    try:
+        ext = os.path.splitext(file.filename)[1].lower()
+        allowed_extensions = ['.pdf', '.docx', '.txt', '.md']
+        if ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type {ext} not supported. Allowed: {', '.join(allowed_extensions)}"
+            )
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            temp_path = tmp_file.name
+
+        try:
+            from services.cloudinary_service import get_cloudinary_service
+            from services.document_service import DocumentIngestor
+            from services.data_writer_agent import get_data_writer_agent
+
+            cloudinary_service = get_cloudinary_service()
+            upload_result = cloudinary_service.upload_document(temp_path, file.filename)
+            cloudinary_url = upload_result["url"]
+
+            db_result = db.client.table("source_document").insert({
+                "file_path": cloudinary_url,
+                "doc_type": doc_type,
+                "submitted_by": submitted_by,
+                "submitted_at": datetime.now().isoformat(),
+            }).execute()
+            source_id = db_result.data[0]["source_id"]
+
+            ingestor = DocumentIngestor()
+            extracted_records = ingestor.ingest_document(temp_path, doc_type, source_id)
+
+            if extracted_records:
+                data_writer = get_data_writer_agent(db.client)
+                write_results = await data_writer.write_records(extracted_records, source_id)
+            else:
+                write_results = {"message": "No records extracted from document"}
+
+            return {
+                "success": True,
+                "source_id": source_id,
+                "document_url": cloudinary_url,
+                "filename": file.filename,
+                "doc_type": doc_type,
+                "records_extracted": len(extracted_records) if extracted_records else 0,
+                "write_results": write_results
+            }
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload process failed: {str(e)}")
+
+
+@app.get("/api/documents")
+async def list_documents(doc_type: Optional[str] = None, limit: int = 50, offset: int = 0):
+    """List uploaded documents with optional type filter and pagination."""
+    try:
+        query = db.client.table("source_document").select("*").order("created_at", desc=True)
+        if doc_type:
+            query = query.eq("doc_type", doc_type)
+        result = query.range(offset, offset + limit - 1).execute()
+        return {"documents": result.data, "limit": limit, "offset": offset}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
+
+
+@app.get("/api/documents/{source_id}")
+async def get_document(source_id: int):
+    """Get single document by source_id."""
+    try:
+        result = db.client.table("source_document").select("*").eq("source_id", source_id).single().execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"document": result.data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get document: {str(e)}")
+
+
+@app.delete("/api/documents/{source_id}")
+async def delete_document(source_id: int):
+    """Delete a document record by source_id."""
+    try:
+        db.client.table("source_document").delete().eq("source_id", source_id).execute()
+        return {"success": True, "message": f"Document {source_id} deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
 
 # ============================================

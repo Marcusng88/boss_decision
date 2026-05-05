@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Brain, Radar, Sparkles } from "lucide-react";
+import { Brain, FileText, Radar, Sparkles } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import { InputPanel } from "@/components/decision/InputPanel";
 import { DataRetrieved } from "@/components/decision/DataRetrieved";
 import { AgentInsights } from "@/components/decision/AgentInsights";
@@ -13,6 +15,7 @@ type Stage = "idle" | "data" | "agents" | "subagents" | "decision";
 const stageOrder: Stage[] = ["data", "agents", "subagents", "decision"];
 
 const Index = () => {
+  const navigate = useNavigate();
   const [stage, setStage] = useState<Stage>("idle");
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [activeQuery, setActiveQuery] = useState<string>("");
@@ -60,9 +63,20 @@ const Index = () => {
               </p>
             </div>
           </div>
-          <div className="hidden md:flex items-center gap-2 rounded-full border border-border bg-card/70 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-            <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-            Runtime online
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/documents")}
+              className="bg-card text-foreground border-border hover:bg-accent/50"
+            >
+              <FileText className="w-4 h-4 mr-2" />
+              Documents
+            </Button>
+            <div className="hidden md:flex items-center gap-2 rounded-full border border-border bg-card/70 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+              Runtime online
+            </div>
           </div>
         </div>
       </header>
