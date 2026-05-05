@@ -64,9 +64,9 @@ export const DocumentUpload = ({ onUploadSuccess }: DocumentUploadProps) => {
         formData.append("custom_extraction", customExtraction.trim());
       }
 
-      // 90-second timeout for AI processing
+      // 240-second timeout for AI processing (Zhipu may retry on 504)
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000);
+      const timeoutId = setTimeout(() => controller.abort(), 240000);
 
       const response = await fetch("http://localhost:8000/api/documents/upload", {
         method: "POST",

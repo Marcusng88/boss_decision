@@ -1,124 +1,179 @@
 """
-Marketing Agent - Evaluates campaign performance and market messaging impact.
-Uses LangChain: Supabase (company tables) + Tavily (web) + NewsData (news).
+Marketing Agent - Evaluates campaign performance, ROI, market positioning.
+- If a document is uploaded: use it as primary evidence.
+- If no document: fetch from Supabase marketing records.
 """
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 from .base_agent import BaseAgent, AgentInsight
-from services.marketing_tools import TavilySearchTool, NewsDataTool
-from services.supabase_agent_tools import build_marketing_supabase_tools
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from .llm_client import llm_json
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_PROMPT = """You are a marketing performance and campaign strategy analyst for an AI business decision engine.
+Analyze the marketing data provided and return ONLY valid JSON:
+{
+  "findings": ["finding1", "finding2", "finding3"],
+  "risks": ["risk1", "risk2"],
+  "recommendation": "single actionable marketing recommendation",
+  "confidence": 0.80,
+  "data_summary": "brief 3-5 word summary",
+  "metric_value": "key metric e.g. 'RM 12k spend, 240 conversions'",
+  "trend": "up or down or flat"
+}
+Focus on: campaign ROI, spend efficiency, channel mix, audience reach, conversion rates, and market positioning.
+"""
+
+
 class MarketingAgent(BaseAgent):
+
     def __init__(self, db_service, llm=None, company_db: Optional[Any] = None):
-        """
-        db_service: LocalKnowledgeService (or compatible) for file-based context.
-        company_db: optional DatabaseService (Supabase) for marketing_record and shallow cross-table reads.
-        """
         super().__init__(db_service, llm)
         self._company_db = company_db
-        self.tools: List[Any] = []
-        supabase_tools = build_marketing_supabase_tools(company_db)
-        if supabase_tools:
-            self.tools.extend(supabase_tools)
-            logger.info("MarketingAgent: %d Supabase read tool(s) enabled", len(supabase_tools))
-        self.tools.extend([TavilySearchTool(), NewsDataTool()])
 
-        # Initialize LangChain LLM
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("GOOGLE_API_KEY not found in environment variables. Please check your .env file.")
-
-        self.lc_llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash-lite",
-            google_api_key=api_key,
-            temperature=0.3
-        )
-
-        # Setup Agent
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a proactive Marketing Performance Analyst. "
-             "You have read-only access to the company's Supabase/PostgreSQL data when company_db is enabled.\n"
-             "1) For performance, spend, channel, campaign, ROI, or internal metrics — call read_marketing_database FIRST "
-             "(table marketing_record). For light org/finance/sales context, use read_supporting_company_data with a valid scope. "
-             "Do NOT deep-dive HR, legal, or supply; use those only for quick cross-checks. Specialist agents own those domains.\n"
-             "2) REVIEW the 'Internal Context' in the user message (file-based KB and uploads).\n"
-             "3) Use tavily_search and newsdata_search for external benchmarks, competitors, and news — after or alongside internal data.\n"
-             "4) Synthesize: do not refuse with 'no data' if you can combine internal rows + search results."),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
-
-        agent = create_tool_calling_agent(self.lc_llm, self.tools, prompt)
-        self.agent_executor = AgentExecutor(agent=agent, tools=self.tools, verbose=True, handle_parsing_errors=True)
+    @staticmethod
+    def _is_heuristic_summary(summary: str) -> bool:
+        """Return True if document summary is a heuristic stub with no real content."""
+        if not summary:
+            return True
+        markers = ["heuristic classification", "llm parse failed", "no llm", "classification applied", "none type"]
+        lower = summary.lower()
+        return any(m in lower for m in markers)
 
     async def retrieve_evidence(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        In LangChain mode, tools are called during the agent run.
-        We still pull internal KB documents as initial context.
-        """
         evidence: List[Dict[str, Any]] = []
+        doc_summary = context.get("document_summary", "")
+        has_real_document = bool(doc_summary) and not self._is_heuristic_summary(doc_summary)
 
-        # 1. Internal knowledge-base documents
-        try:
-            docs = await self.db.get_department_documents("marketing")
-            if docs:
-                evidence.extend(docs)
-                logger.info("MarketingAgent: loaded %d internal KB documents", len(docs))
-        except Exception as exc:
-            logger.warning("MarketingAgent: failed to load internal KB documents: %s", exc)
-
-        # 2. Uploaded document context
-        doc_summary = context.get("document_summary")
-        if doc_summary:
+        if has_real_document:
+            # Good document — use as primary evidence, skip DB
             evidence.append({
                 "source": "uploaded_document",
                 "summary": doc_summary,
-                "department": context.get("document_department", "unknown"),
+                "department": context.get("document_department", "Marketing"),
+                "tags": context.get("document_tags", []),
             })
-        
+            return evidence
+
+        # No document OR heuristic-only summary — fetch from Supabase
+        if doc_summary and not has_real_document:
+            logger.info("MarketingAgent: document summary is heuristic-only, falling back to Supabase")
+
+        db = self._company_db or self.db
+        try:
+            rows = await db.fetch_marketing_records(limit=40)
+            for row in rows:
+                evidence.append({
+                    "source": "supabase_marketing_record",
+                    "record_id": row.get("marketing_id"),
+                    "data": row,
+                })
+            if rows:
+                logger.info("MarketingAgent: loaded %d marketing records from Supabase", len(rows))
+            else:
+                logger.info("MarketingAgent: no marketing records found in Supabase")
+        except Exception as exc:
+            logger.warning("MarketingAgent: failed to load marketing records: %s", exc)
+
         return evidence
 
-    async def analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
-        """
-        Run the LangChain agent to get insights using tools.
-        """
-        # Build initial context from evidence
-        context_str = "\n".join([f"[{e.get('source')}]: {e.get('summary')}" for e in evidence])
-        
-        full_input = f"Query: {query}\n\nInternal Context:\n{context_str}\n\nPlease analyze and provide marketing insights."
-        
-        logger.info("\n[MarketingAgent] Executing LangChain agent for query: %s", query)
-        try:
-            # Note: LangChain's ainvoke is used for async execution
-            response = await self.agent_executor.ainvoke({"input": full_input})
-            output = response.get("output", "No output from agent.")
-            logger.info("[MarketingAgent] LangChain execution completed.")
-        except Exception as exc:
-            logger.error(f"MarketingAgent LangChain execution failed: {exc}")
-            output = f"Analysis failed: {str(exc)}"
-            logger.error(f"[MarketingAgent] LangChain execution failed: {exc}")
+    def _rule_based_analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
+        records = [e["data"] for e in evidence if e.get("source") == "supabase_marketing_record" and e.get("data")]
+        doc_summaries = [e["summary"] for e in evidence if e.get("source") == "uploaded_document" and e.get("summary")]
 
-        # We still need to return an AgentInsight object
-        # We'll use our _llm_client to structure the final output from the LangChain agent's result
-        
-        return await self._llm_analyze(
-            query=query,
-            evidence_summary=output,
-            domain_role="marketing performance and campaign strategy analyst",
-            domain_focus="Campaign ROI, audience segmentation, competitor benchmarking, and market trends.",
-            fallback_insight=AgentInsight(
-                agent_name="Marketing",
-                findings=[output[:200]] if output else ["No findings."],
-                risks=["Analysis limited by execution error"] if not output else ["Risk identified during search."],
-                recommendation="Review terminal logs for details" if not output else "Proceed with recommended strategy.",
-                confidence=0.5,
-                evidence_used=evidence
+        findings: List[str] = []
+        risks: List[str] = []
+
+        if doc_summaries:
+            findings.append("Marketing document reviewed for campaign context")
+            combined = " ".join(doc_summaries).lower()
+            if "roi" in combined or "return" in combined:
+                findings.append("ROI or return metrics mentioned in document")
+            if "spend" in combined or "budget" in combined:
+                findings.append("Budget or spend data present in document")
+            return AgentInsight(
+                agent_name="Marketing", emoji="📣",
+                findings=findings,
+                risks=["Validate document data against live campaign records"],
+                recommendation="Review campaign ROI from uploaded report and align with current spend allocation",
+                confidence=0.65,
+                evidence_used=evidence,
+                data_summary="Document-based review",
             )
+
+        if not records:
+            return AgentInsight(
+                agent_name="Marketing", emoji="📣",
+                findings=["No marketing records found in the database"],
+                risks=["Campaign performance cannot be assessed without data"],
+                recommendation="Establish marketing tracking records before evaluating campaigns",
+                confidence=0.0,
+                evidence_used=evidence,
+            )
+
+        total_spend = sum(r.get("amount", 0) for r in records if r.get("metric_name") == "spend")
+        total_conversions = sum(r.get("amount", 0) for r in records if r.get("metric_name") == "conversions")
+        channels = list({r.get("channel") for r in records if r.get("channel")})
+
+        findings.append(f"Marketing records reviewed: {len(records)} entries across {len(channels)} channel(s)")
+        if total_spend:
+            findings.append(f"Total campaign spend tracked: RM {total_spend:,.0f}")
+        if total_conversions:
+            findings.append(f"Total conversions tracked: {total_conversions:,.0f}")
+        if channels:
+            findings.append(f"Active channels: {', '.join(channels[:5])}")
+
+        metric_value = ""
+        if total_spend and total_conversions and total_spend > 0:
+            cpa = total_spend / total_conversions
+            findings.append(f"Estimated cost per acquisition: RM {cpa:,.2f}")
+            metric_value = f"RM {total_spend:,.0f} spend, {total_conversions:,.0f} conversions"
+            if cpa > 500:
+                risks.append("High cost per acquisition — campaign efficiency needs optimization")
+
+        return AgentInsight(
+            agent_name="Marketing", emoji="📣",
+            findings=findings,
+            risks=risks or ["Monitor channel mix and ROI per campaign period"],
+            recommendation="Review campaign ROI and optimize spend allocation across top-performing channels",
+            confidence=0.75,
+            evidence_used=evidence,
+            data_summary=f"{len(records)} records, {len(channels)} channels",
+            metric_value=metric_value,
         )
+
+    async def analyze(self, evidence: List[Dict[str, Any]], query: str) -> AgentInsight:
+        fallback = self._rule_based_analyze(evidence, query)
+
+        if not evidence:
+            return fallback
+
+        evidence_parts: List[str] = []
+        for e in evidence:
+            if e.get("source") == "uploaded_document":
+                evidence_parts.append(f"Document: {e.get('summary', '')}")
+            elif e.get("source") == "supabase_marketing_record" and e.get("data"):
+                d = e["data"]
+                evidence_parts.append(
+                    f"Campaign: {d.get('campaign_name')} | channel: {d.get('channel')} | "
+                    f"metric: {d.get('metric_name')} = {d.get('amount')} | period: {d.get('period')}"
+                )
+        evidence_summary = "\n".join(evidence_parts) if evidence_parts else "No marketing evidence retrieved."
+
+        user_msg = f"Query: {query}\n\nMarketing Data:\n{evidence_summary[:6000]}"
+        try:
+            result = await llm_json(SYSTEM_PROMPT, user_msg)
+            return AgentInsight(
+                agent_name="Marketing", emoji="📣",
+                findings=result.get("findings", []),
+                risks=result.get("risks", []),
+                recommendation=result.get("recommendation", "Review campaign strategy"),
+                confidence=float(result.get("confidence", 0.75)),
+                evidence_used=evidence,
+                data_summary=result.get("data_summary", "Marketing analysis"),
+                metric_value=result.get("metric_value", ""),
+                trend=result.get("trend", "flat"),
+            )
+        except Exception:
+            return fallback
