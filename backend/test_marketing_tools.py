@@ -8,7 +8,7 @@ load_dotenv()
 
 from agents.manager_agent import ManagerAgent
 from services.local_knowledge_service import LocalKnowledgeService
-from agents import HRAgent, SalesAgent, LegalAgent, MarketingAgent, SupplyChainAgent
+from agents import HRAgent, SalesAgent, LegalAgent, FinanceAgent, MarketingAgent, SupplyChainAgent
 
 
 async def test():
@@ -18,6 +18,7 @@ async def test():
         HRAgent(knowledge),
         SalesAgent(knowledge),
         LegalAgent(knowledge),
+        FinanceAgent(knowledge),
         marketing_agent,
         SupplyChainAgent(knowledge),
     ])

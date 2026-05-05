@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .base_agent import AgentInsight
+from . import agent_logging
 from services.llm_client import UnifiedLLMClient
 
 logger = logging.getLogger(__name__)
@@ -346,6 +347,10 @@ Return JSON only:
         forced_agents: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Dynamically route or use forced agents, then execute and synthesize."""
+        logger.info(
+            "[Manager] orchestrate_start context=%s",
+            agent_logging.context_for_log(context),
+        )
         if forced_agents:
             logger.info("\n[Manager] Using FORCED agents: %s", forced_agents)
             selected_names = forced_agents
@@ -359,16 +364,29 @@ Return JSON only:
             logger.info("\n[Manager] Routing query: %s...", query[:100])
             routing = await self.route_agents(query, context)
             selected_names = routing.get("selected_agents", [])
-            logger.info("[Manager] Selected agents: %s", selected_names)
+            logger.info(
+                "[Manager] route_done agents=%s source=%s confidence=%.2f reasoning=%r",
+                selected_names,
+                routing.get("route_source"),
+                float(routing.get("confidence") or 0),
+                (routing.get("reasoning") or "")[:200],
+            )
         
         force_simple_llm = bool(context.get("force_simple_llm_subagents", False))
 
         agent_insights: List[AgentInsight] = []
         for name in selected_names:
-            logger.info("[Manager] Executing agent: %s", name)
+            logger.info(
+                "[Manager] executing_agent: %s (force_simple_llm=%s)", name, force_simple_llm
+            )
             if force_simple_llm:
                 insight = await self._llm_subagent_reply(name, query, context)
                 agent_insights.append(insight)
+                logger.info(
+                    "[Manager] agent_finished: %s (simple_llm) confidence=%.2f",
+                    name,
+                    float(insight.confidence),
+                )
                 continue
 
             agent = self.agent_registry.get(name)
@@ -376,6 +394,11 @@ Return JSON only:
                 logger.info("[Manager] Agent '%s' not found in registry, using simple LLM reply.", name)
                 insight = await self._llm_subagent_reply(name, query, context)
                 agent_insights.append(insight)
+                logger.info(
+                    "[Manager] agent_finished: %s (registry_miss) confidence=%.2f",
+                    name,
+                    float(insight.confidence),
+                )
                 continue
 
             try:
@@ -391,6 +414,14 @@ Return JSON only:
                     evidence_used=[{"source": "error", "detail": str(exc)}],
                 )
             agent_insights.append(insight)
+            ev_n = len(insight.evidence_used or [])
+            logger.info(
+                "[Manager] agent_finished: %s confidence=%.3f evidence_items=%d findings=%d",
+                name,
+                float(insight.confidence),
+                ev_n,
+                len(insight.findings or []),
+            )
 
         logger.info("[Manager] Synthesizing final decision...")
         conservative_view = await self._generate_conservative_view(agent_insights, query)
@@ -416,11 +447,18 @@ Return JSON only:
 
     async def orchestrate(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Legacy full-orchestration path."""
+        logger.info(
+            "[Manager] orchestrate_legacy context=%s",
+            agent_logging.context_for_log(context),
+        )
         agent_insights = []
         for agent in self.agents:
+            an = getattr(agent, "agent_name", agent.__class__.__name__)
+            logger.info("[Manager] legacy_run agent=%s", an)
             try:
                 insight = await agent.run(query, context)
             except Exception as exc:
+                logger.exception("[Manager] legacy agent %s failed: %s", an, exc)
                 insight = AgentInsight(
                     agent_name=getattr(agent, "agent_name", agent.__class__.__name__),
                     findings=["Agent execution failed"],
@@ -430,6 +468,11 @@ Return JSON only:
                     evidence_used=[{"source": "error", "detail": str(exc)}],
                 )
             agent_insights.append(insight)
+            logger.info(
+                "[Manager] legacy_run_done agent=%s confidence=%.3f",
+                an,
+                float(insight.confidence),
+            )
 
         conservative_view = await self._generate_conservative_view(agent_insights, query)
         aggressive_view = await self._generate_aggressive_view(agent_insights, query)
